@@ -1,5 +1,4 @@
 [toolchain]
 channel = "stable"
 components = ["llvm-tools-preview"]
-targets = ["armv7a-none-eabi"]
-
+targets = ["aarch64-unknown-none"]

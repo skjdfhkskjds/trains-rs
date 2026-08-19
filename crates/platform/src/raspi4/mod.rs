@@ -1,13 +1,13 @@
-//! Raspberry Pi 2B (BCM2836) platform implementation.
+//! Raspberry Pi 4 / Compute Module 4 (BCM2711) platform implementation.
 
 mod gpio;
 mod interrupt;
 mod timer;
 mod uart;
 
-pub use gpio::Bcm2836Gpio;
-pub use interrupt::Bcm2835InterruptController;
-pub use timer::Bcm2835SystemTimer;
+pub use gpio::Bcm2711Gpio;
+pub use interrupt::Gic400;
+pub use timer::ArmGenericTimer;
 pub use uart::Pl011;
 
 use gpio::GPIO;
@@ -17,22 +17,21 @@ use uart::UART0;
 
 use crate::Platform;
 
-pub(super) const PERIPHERAL_BASE: usize = 0x3f00_0000;
-pub(super) const LOCAL_PERIPHERAL_BASE: usize = 0x4000_0000;
+pub(super) const PERIPHERAL_BASE: usize = 0xfe00_0000;
 
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Raspi2b;
+pub struct Raspi4;
 
-pub const RASPI2B: Raspi2b = Raspi2b;
+pub const RASPI4: Raspi4 = Raspi4;
 
-impl Platform for Raspi2b {
+impl Platform for Raspi4 {
     type Console = Pl011;
-    type Gpio = Bcm2836Gpio;
-    type Timer = Bcm2835SystemTimer;
-    type InterruptController = Bcm2835InterruptController;
+    type Gpio = Bcm2711Gpio;
+    type Timer = ArmGenericTimer;
+    type InterruptController = Gic400;
 
     fn init(&self) {
-        INTERRUPTS.route_peripheral_irqs_to_core(0);
+        INTERRUPTS.init();
         UART0.init(&GPIO);
     }
 

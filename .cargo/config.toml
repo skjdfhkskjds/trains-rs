@@ -1,11 +1,11 @@
 [build]
-target = "armv7a-none-eabi"
+target = "aarch64-unknown-none"
 
 [alias]
-image = "run --quiet --manifest-path xtask/Cargo.toml --target x86_64-unknown-linux-gnu"
+image = "run --quiet --manifest-path xtask/Cargo.toml --target aarch64-apple-darwin"
 qemu = "run --release"
 
-[target.armv7a-none-eabi]
+[target.aarch64-unknown-none]
 runner = "scripts/qemu.sh"
 rustflags = [
     "-C", "link-arg=-Tcrates/kernel/linker.ld",

@@ -1,70 +1,68 @@
 # trains-rs boot skeleton
 
-This repository contains the base platform for a 32-bit Raspberry Pi 2B kernel
-written in Rust. It selects Rust's bare-metal Armv7-A soft-float target, enters
-through a short A32 assembly stub, clears `.bss`, establishes a stack, and calls
-Rust. The Raspberry Pi 2 platform layer provides typed GPIO, PL011 console,
-system timer, and interrupt-controller access.
+This repository contains the AArch64 base platform for a microkernel targeting
+the PiKVM V4 Plus. That device uses a Raspberry Pi Compute Module 4 with a
+BCM2711 SoC and four Armv8-A Cortex-A72 cores.
 
-The product is a Cargo workspace:
+The workspace contains:
 
-- `crates/kernel` owns the boot entry point, linker layout, and kernel binary.
-- `crates/platform` is a reusable `no_std` hardware abstraction crate.
-- `xtask` is an isolated host-side helper used by `cargo image`.
-
-Kernel code selects `RASPI2B` and uses the `Platform` trait to obtain its
-console, GPIO, timer, and interrupt-controller capabilities. The concrete
-Raspberry Pi implementation exposes no public inherent device accessors.
+- `crates/kernel`: AArch64 boot entry, linker layout, and kernel binary.
+- `crates/platform`: `no_std` BCM2711 GPIO, PL011, Arm generic timer, and
+  GIC-400 support.
+- `xtask`: host-side image builder used by `cargo image`.
 
 ## Build and run in QEMU
 
-The pinned toolchain file asks rustup for `armv7a-none-eabi` and
-`llvm-tools-preview`. Then:
+Install QEMU with `qemu-system-aarch64` and run:
 
 ```sh
 cargo image
 cargo qemu
 ```
 
-`cargo image` builds the release ELF and extracts `build/kernel7.img` from its
-loadable sections. `cargo qemu` builds the release ELF and passes it to QEMU.
-This is intentional: QEMU recognizes
-the ELF segments and loads them at the linker's `0x8000` address. Passing the
-raw `kernel7.img` to QEMU's `-kernel` option instead invokes QEMU's generic
-32-bit Linux image loader, which relocates it to `0x10000` and does not match
-the Raspberry Pi firmware layout.
+The QEMU runner uses the `raspi4b` machine, which models a BCM2711-class
+Cortex-A72 system. The release ELF is passed directly so QEMU honors its load
+segments and entry point at `0x80000`.
 
 Expected serial output:
 
 ```text
-trains-rs: Raspberry Pi 2 platform ready
-trains-rs: system timer ready
+trains-rs: Raspberry Pi 4 / BCM2711 platform ready
+trains-rs: Arm generic timer ready
 trains-rs: interrupt controller ready
 ```
 
 Exit QEMU with Ctrl-C.
 
-## Real Raspberry Pi 2B image
+QEMU's Pi 4 model does not implement every PiKVM device. In particular, PCIe,
+GENET Ethernet, and the PiKVM carrier board's capture and management devices
+require validation on real hardware.
 
-`cargo image` also strips the ELF container and emits
-`build/kernel7.img`. A Pi boot partition needs the normal Raspberry Pi firmware
-files (`bootcode.bin`, `start.elf`, and matching `fixup.dat`), the appropriate
-Pi 2 DTB, `build/kernel7.img`, and the settings in `boot/config.txt`.
+## PiKVM V4 Plus image
 
-The entry stub preserves `r0`, `r1`, and `r2`; in the firmware boot path `r2`
-can carry the device-tree pointer. The Rust entry does not parse it yet.
+`cargo image` emits `build/kernel8.img`. Copy it to a Raspberry Pi firmware
+boot partition and use these minimum `config.txt` settings:
+
+```ini
+arm_64bit=1
+enable_gic=1
+kernel=kernel8.img
+enable_uart=1
+```
+
+Keep the normal Raspberry Pi 4 firmware and the CM4 device tree on the boot
+partition. The platform currently assumes low-peripheral mode, where BCM2711
+devices start at `0xfe000000` and the GIC-400 starts at `0xff840000`.
 
 ## Current boot contract
 
-- ISA: 32-bit Armv7-A (A32), soft-float ABI
-- QEMU machine: `raspi2b` (Cortex-A7, four cores, 1 GiB RAM)
-- linked/load address: `0x00008000`
-- early stack: 64 KiB linker-reserved `NOLOAD` region
-- primary core: MPIDR affinity 0; other QEMU cores park in `wfe`
-- platform: GPIO, PL011, system timer, and interrupt-controller register access
+- ISA and ABI: little-endian AArch64 (`aarch64-unknown-none`)
+- CPU: Armv8-A Cortex-A72, four cores
+- QEMU machine: `raspi4b`, 2 GiB RAM
+- firmware image: `kernel8.img`
+- linked/load address: `0x00080000`
+- firmware argument: device-tree address in `x0`
+- primary core: MPIDR affinity 0; secondary cores park in `wfe`
+- peripherals: BCM2711 GPIO, PL011, Arm generic physical timer, GIC-400
 - MMU, caches, exception vectors, allocator, and SMP: not initialized
-- IRQ lines remain CPU-masked until exception handling is implemented
-
-Using soft-float avoids making FPU setup part of the initial boot contract.
-CPU-specific optimization can be enabled after the low-level VFP/NEON state is
-initialized deliberately.
+- DAIF remains masked until exception handling is implemented

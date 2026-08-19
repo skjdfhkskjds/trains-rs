@@ -3,9 +3,9 @@
 use core::fmt;
 
 mod mmio;
-pub mod raspi2b;
+pub mod raspi4;
 
-pub use raspi2b::{RASPI2B, Raspi2b};
+pub use raspi4::{RASPI4, Raspi4};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -36,12 +36,13 @@ pub enum CompareChannel {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u8)]
+#[repr(u16)]
 pub enum Interrupt {
-    SystemTimer1 = 1,
-    SystemTimer3 = 3,
-    Auxiliary = 29,
-    Uart = 57,
+    PhysicalTimer = 30,
+    SystemTimer1 = 97,
+    SystemTimer3 = 99,
+    Auxiliary = 125,
+    Uart = 153,
 }
 
 pub trait Console: Copy + fmt::Write {

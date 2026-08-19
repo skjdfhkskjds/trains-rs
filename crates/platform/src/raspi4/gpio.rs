@@ -1,5 +1,3 @@
-use core::arch::asm;
-
 use crate::mmio::{device_barrier, read32, write32};
 use crate::{Gpio, PinFunction, Pull};
 
@@ -10,19 +8,18 @@ const GPFSEL0: usize = 0x00;
 const GPSET0: usize = 0x1c;
 const GPCLR0: usize = 0x28;
 const GPLEV0: usize = 0x34;
-const GPPUD: usize = 0x94;
-const GPPUDCLK0: usize = 0x98;
+const GPIO_PUP_PDN_CNTRL_REG0: usize = 0xe4;
 
 const PIN_COUNT: u8 = 54;
 
 #[derive(Clone, Copy)]
-pub struct Bcm2836Gpio {
+pub struct Bcm2711Gpio {
     base: usize,
 }
 
-pub(super) const GPIO: Bcm2836Gpio = Bcm2836Gpio { base: GPIO_BASE };
+pub(super) const GPIO: Bcm2711Gpio = Bcm2711Gpio { base: GPIO_BASE };
 
-impl Gpio for Bcm2836Gpio {
+impl Gpio for Bcm2711Gpio {
     fn set_function(&self, pin: u8, function: PinFunction) {
         self.assert_pin(pin);
 
@@ -40,22 +37,21 @@ impl Gpio for Bcm2836Gpio {
     fn set_pull(&self, pin: u8, pull: Pull) {
         self.assert_pin(pin);
 
-        // The BCM2835 pull-control sequence requires 150 peripheral clock
-        // cycles on either side of asserting the pin's clock bit.
-        // SAFETY: all addresses are fixed BCM2836 GPIO registers.
-        unsafe { write32(self.base + GPPUD, pull as u32) };
-        delay_cycles();
-
-        let clock = self.base + GPPUDCLK0 + usize::from(pin / 32) * 4;
-        // SAFETY: the validated pin selects GPPUDCLK0 or GPPUDCLK1.
-        unsafe { write32(clock, 1 << (pin % 32)) };
-        delay_cycles();
-
-        // SAFETY: clear the pull-control sequence registers.
-        unsafe {
-            write32(self.base + GPPUD, 0);
-            write32(clock, 0);
-        }
+        let register = self.base + GPIO_PUP_PDN_CNTRL_REG0 + usize::from(pin / 16) * 4;
+        let shift = u32::from((pin % 16) * 2);
+        // BCM2711 uses a direct two-bit pull field per pin: 0=none, 1=up,
+        // 2=down. The public enum retains the older BCM2835 ordering.
+        // SAFETY: the validated pin selects one of four pull-control registers.
+        let mut value = unsafe { read32(register) };
+        value &= !(0b11 << shift);
+        let encoding = match pull {
+            Pull::None => 0,
+            Pull::Down => 2,
+            Pull::Up => 1,
+        };
+        value |= encoding << shift;
+        // SAFETY: `register` is the same validated pull-control register.
+        unsafe { write32(register, value) };
         device_barrier();
     }
 
@@ -77,16 +73,8 @@ impl Gpio for Bcm2836Gpio {
     }
 }
 
-impl Bcm2836Gpio {
+impl Bcm2711Gpio {
     fn assert_pin(&self, pin: u8) {
         assert!(pin < PIN_COUNT, "invalid Raspberry Pi GPIO pin");
-    }
-}
-
-#[inline(never)]
-fn delay_cycles() {
-    for _ in 0..150 {
-        // SAFETY: a NOP has no side effects beyond consuming a CPU cycle.
-        unsafe { asm!("nop", options(nomem, nostack, preserves_flags)) };
     }
 }

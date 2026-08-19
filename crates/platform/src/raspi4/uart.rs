@@ -4,7 +4,7 @@ use crate::mmio::{device_barrier, read32, write32};
 use crate::{Console, Gpio, PinFunction, Pull};
 
 use super::PERIPHERAL_BASE;
-use super::gpio::Bcm2836Gpio;
+use super::gpio::Bcm2711Gpio;
 
 const UART0_BASE: usize = PERIPHERAL_BASE + 0x20_1000;
 
@@ -36,7 +36,7 @@ pub struct Pl011 {
 pub(super) const UART0: Pl011 = Pl011 { base: UART0_BASE };
 
 impl Pl011 {
-    pub(super) fn init(&self, gpio: &Bcm2836Gpio) {
+    pub(super) fn init(&self, gpio: &Bcm2711Gpio) {
         gpio.set_function(14, PinFunction::Alt0);
         gpio.set_function(15, PinFunction::Alt0);
         gpio.set_pull(14, Pull::None);

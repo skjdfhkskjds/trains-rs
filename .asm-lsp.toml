@@ -1,0 +1,14 @@
+[default_config]
+assembler = "gas"
+instruction_set = "arm64"
+
+[opts]
+compiler = "clang"
+compile_flags_txt = [
+  "-target",
+  "aarch64-unknown-none",
+  "-x",
+  "assembler-with-cpp",
+]
+diagnostics = true
+default_diagnostics = true

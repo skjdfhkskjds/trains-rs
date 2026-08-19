@@ -1,41 +1,35 @@
-.syntax unified
-.arch armv7-a
-.arm
+.arch armv8-a
 
 .section .text._start, "ax"
 .global _start
 .type _start, %function
 
 _start:
-    /* Preserve the firmware/QEMU boot arguments for Rust. */
-    mov r4, r0
-    mov r5, r1
-    mov r6, r2
+    /* The 64-bit Raspberry Pi boot protocol passes the DTB address in x0. */
+    mov x19, x0
 
-    cpsid if
+    msr daifset, #0xf
 
     /* QEMU enters an ELF image on every emulated core. Keep only core 0. */
-    mrc p15, 0, r0, c0, c0, 5
-    ands r0, r0, #3
+    mrs x0, mpidr_el1
+    ands x0, x0, #3
     bne .Lpark
 
-    ldr sp, =__stack_top
+    ldr x0, =__stack_top
+    mov sp, x0
 
     /* The raw image does not contain the NOBITS .bss section. */
-    ldr r0, =__bss_start
-    ldr r1, =__bss_end
-    mov r2, #0
+    ldr x0, =__bss_start
+    ldr x1, =__bss_end
 .Lzero_bss:
-    cmp r0, r1
-    strlo r2, [r0], #4
+    cmp x0, x1
+    str xzr, [x0], #8
     blo .Lzero_bss
 
-    dsb
+    dsb sy
     isb
 
-    mov r0, r4
-    mov r1, r5
-    mov r2, r6
+    mov x0, x19
     bl kernel_main
 
 .Lpark:

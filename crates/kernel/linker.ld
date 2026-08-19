@@ -8,8 +8,8 @@ PHDRS
 
 SECTIONS
 {
-    /* Raspberry Pi's 32-bit firmware loads kernel7.img at 0x8000. */
-    . = 0x00008000;
+    /* Raspberry Pi 4 firmware loads the 64-bit kernel8.img at 0x80000. */
+    . = 0x00080000;
     __kernel_start = .;
 
     .text : ALIGN(16)
@@ -21,14 +21,7 @@ SECTIONS
     .rodata : ALIGN(16)
     {
         *(.rodata .rodata.*)
-        *(.ARM.extab .ARM.extab.*)
-    } :text
-
-    .ARM.exidx : ALIGN(16)
-    {
-        __exidx_start = .;
-        *(.ARM.exidx .ARM.exidx.*)
-        __exidx_end = .;
+        *(.gcc_except_table .gcc_except_table.*)
     } :text
 
     .data : ALIGN(16)
