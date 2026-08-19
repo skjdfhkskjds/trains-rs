@@ -7,8 +7,16 @@ name = "trains-kernel"
 version = "0.1.0"
 dependencies = [
  "trains-platform",
+ "trains-primitives",
 ]
 
 [[package]]
 name = "trains-platform"
+version = "0.1.0"
+dependencies = [
+ "trains-primitives",
+]
+
+[[package]]
+name = "trains-primitives"
 version = "0.1.0"

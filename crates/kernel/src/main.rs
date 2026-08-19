@@ -8,6 +8,7 @@ use trains_platform::{
     InterruptController as _, Platform as _, RASPI4, Timer as _, delay::DelayNs as _,
     raspi4::Interrupt,
 };
+use trains_primitives::time::Duration;
 
 global_asm!(include_str!("boot.S"));
 
@@ -32,7 +33,7 @@ pub extern "C" fn kernel_main(_dtb: usize) -> ! {
     let interrupts = platform.interrupt_controller();
     timer.cancel_deadline();
     interrupts.enable(Interrupt::PhysicalTimer);
-    timer.schedule_after(1_000);
+    timer.schedule_after(Duration::from_millis(1));
     timer.delay_us(2_000);
 
     if interrupts.is_pending(Interrupt::PhysicalTimer) {

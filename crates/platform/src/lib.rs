@@ -7,6 +7,8 @@ pub mod io;
 mod mmio;
 pub mod raspi4;
 
+pub use trains_primitives::time;
+
 pub use raspi4::{RASPI4, Raspi4};
 
 pub trait Console:
@@ -29,9 +31,9 @@ pub trait Gpio: Copy {
 }
 
 pub trait Timer: Copy + delay::DelayNs {
-    fn now(&self) -> u64;
-    fn schedule_after(&self, microseconds: u32);
-    fn set_deadline(&self, timestamp: u64);
+    fn now(&self) -> time::Instant;
+    fn schedule_after(&self, duration: time::Duration);
+    fn set_deadline(&self, deadline: time::Instant);
     fn cancel_deadline(&self);
 }
 

@@ -2,6 +2,7 @@ use core::arch::asm;
 
 use crate::Timer;
 use crate::delay::DelayNs;
+use crate::time::{Duration, Instant};
 
 #[derive(Clone, Copy)]
 pub struct ArmTimer;
@@ -28,18 +29,27 @@ fn frequency() -> u64 {
     value
 }
 
-fn micros_to_ticks(micros: u32, frequency: u64) -> u64 {
-    frequency.saturating_mul(u64::from(micros)) / 1_000_000
-}
-
 fn nanos_to_ticks(nanoseconds: u32, frequency: u64) -> u64 {
     frequency
         .saturating_mul(u64::from(nanoseconds))
         .div_ceil(1_000_000_000)
 }
 
-fn ticks_to_micros(ticks: u64, frequency: u64) -> u64 {
-    ticks.saturating_mul(1_000_000) / frequency
+fn duration_to_ticks(duration: Duration, frequency: u64) -> u64 {
+    duration
+        .as_nanos()
+        .saturating_mul(u128::from(frequency))
+        .div_ceil(1_000_000_000)
+        .min(u128::from(u64::MAX)) as u64
+}
+
+fn ticks_to_instant(ticks: u64, frequency: u64) -> Instant {
+    let nanoseconds = u128::from(ticks)
+        .saturating_mul(1_000_000_000)
+        .checked_div(u128::from(frequency))
+        .unwrap_or(0)
+        .min(u128::from(u64::MAX)) as u64;
+    Instant::new(nanoseconds)
 }
 
 impl DelayNs for ArmTimer {
@@ -51,26 +61,23 @@ impl DelayNs for ArmTimer {
 }
 
 impl Timer for ArmTimer {
-    fn now(&self) -> u64 {
-        ticks_to_micros(counter(), frequency())
+    fn now(&self) -> Instant {
+        ticks_to_instant(counter(), frequency())
     }
 
-    fn schedule_after(&self, micros: u32) {
-        let ticks = micros_to_ticks(micros, frequency()).min(u32::MAX as u64);
-        // SAFETY: CNTP_TVAL_EL0 and CNTP_CTL_EL0 control the current core's
+    fn schedule_after(&self, duration: Duration) {
+        let deadline = counter().saturating_add(duration_to_ticks(duration, frequency()));
+        // SAFETY: CNTP_CVAL_EL0 and CNTP_CTL_EL0 control the current core's
         // non-secure physical timer. DAIF keeps delivery masked for now.
         unsafe {
-            asm!("msr cntp_tval_el0, {ticks}", ticks = in(reg) ticks, options(nostack));
+            asm!("msr cntp_cval_el0, {deadline}", deadline = in(reg) deadline, options(nostack));
             asm!("msr cntp_ctl_el0, {control}", control = in(reg) 1_u64, options(nostack));
             asm!("isb", options(nostack, preserves_flags));
         }
     }
 
-    fn set_deadline(&self, timestamp: u64) {
-        let delay = timestamp
-            .saturating_sub(self.now())
-            .min(u64::from(u32::MAX)) as u32;
-        self.schedule_after(delay);
+    fn set_deadline(&self, deadline: Instant) {
+        self.schedule_after(deadline.saturating_duration_since(self.now()));
     }
 
     fn cancel_deadline(&self) {

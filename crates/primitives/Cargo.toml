@@ -1,11 +1,8 @@
 [package]
-name = "trains-platform"
+name = "trains-primitives"
 version.workspace = true
 edition.workspace = true
 publish = false
-
-[dependencies]
-trains-primitives = { path = "../primitives" }
 
 [lib]
 test = false
