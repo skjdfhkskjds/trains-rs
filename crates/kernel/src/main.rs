@@ -12,6 +12,7 @@ global_asm!(include_str!("exceptions.S"));
 mod context;
 mod exceptions;
 mod interrupts;
+mod task;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_main(_dtb: usize) -> ! {
@@ -36,6 +37,12 @@ pub extern "C" fn kernel_main(_dtb: usize) -> ! {
         writeln!(console, "trains-rs: context switching ready").ok();
     } else {
         writeln!(console, "trains-rs: context switching self-test failed").ok();
+    }
+
+    if task::self_test() {
+        writeln!(console, "trains-rs: task primitive ready").ok();
+    } else {
+        writeln!(console, "trains-rs: task primitive self-test failed").ok();
     }
 
     let mut timer = platform.timer();
