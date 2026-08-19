@@ -39,10 +39,19 @@ pub trait Timer: Copy + delay::DelayNs {
 
 pub trait InterruptController: Copy {
     type Interrupt: Copy;
+    type Claim: InterruptClaim<Interrupt = Self::Interrupt>;
 
     fn enable(&self, interrupt: Self::Interrupt);
     fn disable(&self, interrupt: Self::Interrupt);
     fn is_pending(&self, interrupt: Self::Interrupt) -> bool;
+    fn claim(&self) -> Option<Self::Claim>;
+    fn complete(&self, claim: Self::Claim);
+}
+
+pub trait InterruptClaim: Copy {
+    type Interrupt: Copy;
+
+    fn interrupt(self) -> Option<Self::Interrupt>;
 }
 
 /// Hardware capabilities required by the kernel base.

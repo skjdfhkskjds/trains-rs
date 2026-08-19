@@ -1,5 +1,5 @@
-use crate::InterruptController;
 use crate::mmio::{device_barrier, read32, write32};
+use crate::{InterruptClaim, InterruptController};
 
 use super::Interrupt;
 
@@ -16,14 +16,34 @@ const GICD_ITARGETSR: usize = 0x800;
 
 const GICC_CTLR: usize = 0x000;
 const GICC_PMR: usize = 0x004;
+const GICC_IAR: usize = 0x00c;
+const GICC_EOIR: usize = 0x010;
+
+const INTERRUPT_ID_MASK: u32 = 0x3ff;
+const SPURIOUS_INTERRUPT_START: u32 = 1020;
 
 const CPU0_TARGET: u32 = 1;
 const DEFAULT_PRIORITY: u32 = 0xa0;
+const ENABLE_GROUPS_WITH_COMMON_ACK: u32 = 0b111;
 
 #[derive(Clone, Copy)]
 pub struct Gic400 {
     distributor: usize,
     cpu_interface: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct GicClaim {
+    acknowledgement: u32,
+    interrupt: Option<Interrupt>,
+}
+
+impl InterruptClaim for GicClaim {
+    type Interrupt = Interrupt;
+
+    fn interrupt(self) -> Option<Self::Interrupt> {
+        self.interrupt
+    }
 }
 
 pub(super) const INTERRUPTS: Gic400 = Gic400 {
@@ -35,11 +55,14 @@ impl Gic400 {
     pub(super) fn init(&self) {
         self.write_distributor(GICD_CTLR, 0);
 
-        // Permit every priority at the CPU interface, then enable Group 0.
+        // Permit every priority at the CPU interface, then enable both groups.
+        // In the non-secure view bit 0 aliases Group 1 and the other bits are
+        // ignored. In a secure view this enables both groups and permits the
+        // common IAR/EOIR path to acknowledge Group 1 interrupts.
         // CPU IRQs remain masked in DAIF until exception vectors exist.
         self.write_cpu(GICC_PMR, 0xff);
-        self.write_cpu(GICC_CTLR, 1);
-        self.write_distributor(GICD_CTLR, 1);
+        self.write_cpu(GICC_CTLR, ENABLE_GROUPS_WITH_COMMON_ACK);
+        self.write_distributor(GICD_CTLR, 3);
         device_barrier();
     }
 
@@ -88,10 +111,17 @@ impl Gic400 {
         // SAFETY: every call uses a GIC-400 CPU-interface register offset.
         unsafe { write32(self.cpu_interface + offset, value) };
     }
+
+    #[inline]
+    fn read_cpu(&self, offset: usize) -> u32 {
+        // SAFETY: every call uses a GIC-400 CPU-interface register offset.
+        unsafe { read32(self.cpu_interface + offset) }
+    }
 }
 
 impl InterruptController for Gic400 {
     type Interrupt = Interrupt;
+    type Claim = GicClaim;
 
     fn enable(&self, interrupt: Interrupt) {
         self.configure(interrupt);
@@ -112,5 +142,23 @@ impl InterruptController for Gic400 {
         let (register, mask) = self.bit_register(GICD_ISPENDR, interrupt);
         // SAFETY: `bit_register` returns the interrupt's pending register.
         unsafe { read32(register) & mask != 0 }
+    }
+
+    fn claim(&self) -> Option<Self::Claim> {
+        let acknowledgement = self.read_cpu(GICC_IAR);
+        let id = acknowledgement & INTERRUPT_ID_MASK;
+        if id >= SPURIOUS_INTERRUPT_START {
+            return None;
+        }
+
+        Some(GicClaim {
+            acknowledgement,
+            interrupt: Interrupt::from_id(id as u16),
+        })
+    }
+
+    fn complete(&self, claim: Self::Claim) {
+        self.write_cpu(GICC_EOIR, claim.acknowledgement);
+        device_barrier();
     }
 }

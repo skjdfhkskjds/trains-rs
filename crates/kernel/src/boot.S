@@ -26,6 +26,13 @@ _start:
     b .Lenter_el1
 
 .Ldrop_from_el3:
+    /* Make the physical timer PPI visible after entering non-secure EL1. */
+    ldr x0, =0xff841080
+    ldr w1, [x0]
+    orr w1, w1, #(1 << 30)
+    str w1, [x0]
+    dsb sy
+
     /* AArch64 at lower exception levels, in the non-secure world. */
     mov x0, #0x411
     msr scr_el3, x0

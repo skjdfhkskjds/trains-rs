@@ -40,6 +40,19 @@ pub enum Interrupt {
     Uart = 153,
 }
 
+impl Interrupt {
+    fn from_id(id: u16) -> Option<Self> {
+        match id {
+            30 => Some(Self::PhysicalTimer),
+            97 => Some(Self::SystemTimer1),
+            99 => Some(Self::SystemTimer3),
+            125 => Some(Self::Auxiliary),
+            153 => Some(Self::Uart),
+            _ => None,
+        }
+    }
+}
+
 use gpio::GPIO;
 use interrupt::INTERRUPTS;
 use timer::SYSTEM_TIMER;

@@ -61,6 +61,10 @@ impl Vector {
     fn is_synchronous(self) -> bool {
         (self as u64) & 0b11 == 0
     }
+
+    fn is_irq(self) -> bool {
+        (self as u64) & 0b11 == 1
+    }
 }
 
 #[repr(C)]
@@ -93,6 +97,18 @@ pub fn self_test() -> bool {
     SELF_TEST_HANDLED.load(Ordering::Relaxed)
 }
 
+pub fn enable_irqs() {
+    // SAFETY: vector entry and IRQ dispatch are initialized before this is
+    // called. Only the IRQ mask is changed; FIQ, SError, and debug stay masked.
+    unsafe { asm!("msr daifclr, #2", options(nomem, nostack, preserves_flags)) };
+}
+
+pub fn disable_irqs() {
+    // SAFETY: masking IRQ delivery is always safe and is used around kernel
+    // state that is not yet designed for concurrent interrupt mutation.
+    unsafe { asm!("msr daifset, #2", options(nomem, nostack, preserves_flags)) };
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn exception_handler(frame: &mut ExceptionFrame) {
     let vector = Vector::from_raw(frame.vector);
@@ -104,6 +120,11 @@ extern "C" fn exception_handler(frame: &mut ExceptionFrame) {
         && syndrome as u16 == SELF_TEST_SVC
     {
         SELF_TEST_HANDLED.store(true, Ordering::Relaxed);
+        return;
+    }
+
+    if vector.is_some_and(Vector::is_irq) {
+        crate::interrupts::handle();
         return;
     }
 
