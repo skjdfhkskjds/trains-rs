@@ -41,7 +41,7 @@ vector_table:
     .balign 2048
 
 .macro exception_entry vector
-    sub sp, sp, #288
+    sub sp, sp, #304
     stp x0, x1, [sp, #0]
     stp x2, x3, [sp, #16]
     stp x4, x5, [sp, #32]
@@ -59,23 +59,28 @@ vector_table:
     stp x28, x29, [sp, #224]
     str x30, [sp, #240]
 
-    mrs x1, elr_el1
+    mrs x1, sp_el0
     str x1, [sp, #248]
-    mrs x1, spsr_el1
+    mrs x1, elr_el1
     str x1, [sp, #256]
-    mrs x1, esr_el1
+    mrs x1, spsr_el1
     str x1, [sp, #264]
-    mrs x1, far_el1
+    mrs x1, esr_el1
     str x1, [sp, #272]
-    mov x1, #\vector
+    mrs x1, far_el1
     str x1, [sp, #280]
+    mov x1, #\vector
+    str x1, [sp, #288]
+    str xzr, [sp, #296]
 
     mov x0, sp
     bl exception_handler
 
     ldr x0, [sp, #248]
-    msr elr_el1, x0
+    msr sp_el0, x0
     ldr x0, [sp, #256]
+    msr elr_el1, x0
+    ldr x0, [sp, #264]
     msr spsr_el1, x0
 
     ldr x30, [sp, #240]
@@ -94,7 +99,7 @@ vector_table:
     ldp x4, x5, [sp, #32]
     ldp x2, x3, [sp, #16]
     ldp x0, x1, [sp, #0]
-    add sp, sp, #288
+    add sp, sp, #304
     eret
 .endm
 

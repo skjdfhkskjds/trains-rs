@@ -9,6 +9,7 @@ use trains_platform::{Platform as _, RASPI4, delay::DelayNs as _};
 global_asm!(include_str!("boot.S"));
 global_asm!(include_str!("exceptions.S"));
 
+mod context;
 mod exceptions;
 mod interrupts;
 
@@ -29,6 +30,12 @@ pub extern "C" fn kernel_main(_dtb: usize) -> ! {
         writeln!(console, "trains-rs: exception handling ready").ok();
     } else {
         writeln!(console, "trains-rs: exception handling self-test failed").ok();
+    }
+
+    if context::self_test() {
+        writeln!(console, "trains-rs: context switching ready").ok();
+    } else {
+        writeln!(console, "trains-rs: context switching self-test failed").ok();
     }
 
     let mut timer = platform.timer();

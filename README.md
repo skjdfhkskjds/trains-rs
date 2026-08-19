@@ -29,6 +29,7 @@ Expected serial output:
 ```text
 trains-rs: Raspberry Pi 4 / BCM2711 platform ready
 trains-rs: exception handling ready
+trains-rs: context switching ready
 trains-rs: Arm generic timer ready
 trains-rs: interrupt handling ready
 ```
@@ -67,6 +68,7 @@ devices start at `0xfe000000` and the GIC-400 starts at `0xff840000`.
 - primary core: MPIDR affinity 0; secondary cores park in `wfe`
 - peripherals: BCM2711 GPIO, PL011, Arm generic physical timer, GIC-400
 - exception vectors: installed at EL1; synchronous exceptions capture a full general-purpose register frame
+- context switching: register contexts can be captured from and restored through an exception frame
 - IRQ handling: GIC claims are dispatched and completed; timer IRQ delivery is enabled on demand
 - MMU, caches, allocator, and SMP: not initialized
 - IRQ delivery is enabled on demand; FIQ remains masked

@@ -7,6 +7,7 @@ use trains_platform::{Platform as _, RASPI4};
 
 const SVC64_EXCEPTION_CLASS: u64 = 0x15;
 const SELF_TEST_SVC: u16 = 0x54;
+pub(crate) const CONTEXT_SELF_TEST_SVC: u16 = 0x55;
 
 static SELF_TEST_HANDLED: AtomicBool = AtomicBool::new(false);
 
@@ -68,13 +69,15 @@ impl Vector {
 }
 
 #[repr(C)]
-struct ExceptionFrame {
-    registers: [u64; 31],
-    elr: u64,
-    spsr: u64,
-    esr: u64,
-    far: u64,
-    vector: u64,
+pub(crate) struct ExceptionFrame {
+    pub(crate) registers: [u64; 31],
+    pub(crate) stack_pointer: u64,
+    pub(crate) elr: u64,
+    pub(crate) spsr: u64,
+    pub(crate) esr: u64,
+    pub(crate) far: u64,
+    pub(crate) vector: u64,
+    reserved: u64,
 }
 
 pub fn init() {
@@ -120,6 +123,14 @@ extern "C" fn exception_handler(frame: &mut ExceptionFrame) {
         && syndrome as u16 == SELF_TEST_SVC
     {
         SELF_TEST_HANDLED.store(true, Ordering::Relaxed);
+        return;
+    }
+
+    if vector.is_some_and(Vector::is_synchronous)
+        && exception_class == SVC64_EXCEPTION_CLASS
+        && syndrome as u16 == CONTEXT_SELF_TEST_SVC
+    {
+        crate::context::handle_self_test(frame);
         return;
     }
 
