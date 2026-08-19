@@ -1,0 +1,17 @@
+[package]
+name = "trains-kernel"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+members = ["xtask"]
+default-members = ["."]
+resolver = "3"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+codegen-units = 1
+lto = true
+panic = "abort"

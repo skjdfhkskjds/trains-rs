@@ -1,0 +1,13 @@
+[build]
+target = "armv7a-none-eabi"
+
+[alias]
+image = "run --quiet --package xtask --target x86_64-unknown-linux-gnu"
+qemu = "run --release"
+
+[target.armv7a-none-eabi]
+runner = "scripts/qemu.sh"
+rustflags = [
+    "-C", "link-arg=-Tlinker.ld",
+    "-C", "link-arg=--gc-sections",
+]

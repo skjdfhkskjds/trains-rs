@@ -1,0 +1,5 @@
+# Raspberry Pi 2B firmware configuration for the generated raw image.
+arm_64bit=0
+kernel=kernel7.img
+enable_uart=1
+
