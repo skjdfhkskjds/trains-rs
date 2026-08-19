@@ -1,10 +1,12 @@
+use core::convert::Infallible;
 use core::fmt;
 
+use crate::io::{ErrorType, Read, ReadReady, Write, WriteReady};
 use crate::mmio::{device_barrier, read32, write32};
-use crate::{Console, Gpio, PinFunction, Pull};
+use crate::{Console, Gpio};
 
-use super::PERIPHERAL_BASE;
 use super::gpio::Bcm2711Gpio;
+use super::{PERIPHERAL_BASE, PinFunction, Pull};
 
 const UART0_BASE: usize = PERIPHERAL_BASE + 0x20_1000;
 
@@ -20,6 +22,7 @@ const ICR: usize = 0x44;
 
 const FR_RXFE: u32 = 1 << 4;
 const FR_TXFF: u32 = 1 << 5;
+const FR_BUSY: u32 = 1 << 3;
 const LCRH_FEN: u32 = 1 << 4;
 const LCRH_WLEN_8: u32 = 0b11 << 5;
 const CR_UARTEN: u32 = 1;
@@ -69,32 +72,6 @@ impl Pl011 {
 }
 
 impl Console for Pl011 {
-    fn write_byte(&self, byte: u8) {
-        while self.read_register(FR) & FR_TXFF != 0 {}
-        self.write_register(DR, u32::from(byte));
-    }
-
-    fn try_write_byte(&self, byte: u8) -> bool {
-        if self.read_register(FR) & FR_TXFF != 0 {
-            return false;
-        }
-        self.write_register(DR, u32::from(byte));
-        true
-    }
-
-    fn read_byte(&self) -> u8 {
-        while self.read_register(FR) & FR_RXFE != 0 {}
-        self.read_register(DR) as u8
-    }
-
-    fn try_read_byte(&self) -> Option<u8> {
-        if self.read_register(FR) & FR_RXFE != 0 {
-            None
-        } else {
-            Some(self.read_register(DR) as u8)
-        }
-    }
-
     fn set_interrupt_mask(&self, mask: u32) {
         self.write_register(IMSC, mask & ALL_INTERRUPTS);
     }
@@ -108,13 +85,72 @@ impl Console for Pl011 {
     }
 }
 
+impl ErrorType for Pl011 {
+    type Error = Infallible;
+}
+
+impl Read for Pl011 {
+    fn read(&mut self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+
+        while self.read_register(FR) & FR_RXFE != 0 {}
+        buffer[0] = self.read_register(DR) as u8;
+
+        let mut count = 1;
+        while count < buffer.len() && self.read_register(FR) & FR_RXFE == 0 {
+            buffer[count] = self.read_register(DR) as u8;
+            count += 1;
+        }
+        Ok(count)
+    }
+}
+
+impl Write for Pl011 {
+    fn write(&mut self, buffer: &[u8]) -> Result<usize, Self::Error> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+
+        while self.read_register(FR) & FR_TXFF != 0 {}
+        self.write_register(DR, u32::from(buffer[0]));
+
+        let mut count = 1;
+        while count < buffer.len() && self.read_register(FR) & FR_TXFF == 0 {
+            self.write_register(DR, u32::from(buffer[count]));
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        while self.read_register(FR) & FR_BUSY != 0 {}
+        Ok(())
+    }
+}
+
+impl ReadReady for Pl011 {
+    fn read_ready(&mut self) -> Result<bool, Self::Error> {
+        Ok(self.read_register(FR) & FR_RXFE == 0)
+    }
+}
+
+impl WriteReady for Pl011 {
+    fn write_ready(&mut self) -> Result<bool, Self::Error> {
+        Ok(self.read_register(FR) & FR_TXFF == 0)
+    }
+}
+
 impl fmt::Write for Pl011 {
     fn write_str(&mut self, value: &str) -> fmt::Result {
         for byte in value.bytes() {
             if byte == b'\n' {
-                Console::write_byte(self, b'\r');
+                while self.read_register(FR) & FR_TXFF != 0 {}
+                self.write_register(DR, u32::from(b'\r'));
             }
-            Console::write_byte(self, byte);
+            while self.read_register(FR) & FR_TXFF != 0 {}
+            self.write_register(DR, u32::from(byte));
         }
         Ok(())
     }

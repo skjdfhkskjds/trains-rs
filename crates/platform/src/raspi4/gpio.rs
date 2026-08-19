@@ -1,7 +1,7 @@
+use crate::Gpio;
 use crate::mmio::{device_barrier, read32, write32};
-use crate::{Gpio, PinFunction, Pull};
 
-use super::PERIPHERAL_BASE;
+use super::{PERIPHERAL_BASE, PinFunction, Pull};
 
 const GPIO_BASE: usize = PERIPHERAL_BASE + 0x20_0000;
 const GPFSEL0: usize = 0x00;
@@ -20,6 +20,10 @@ pub struct Bcm2711Gpio {
 pub(super) const GPIO: Bcm2711Gpio = Bcm2711Gpio { base: GPIO_BASE };
 
 impl Gpio for Bcm2711Gpio {
+    type Pin = u8;
+    type Function = PinFunction;
+    type Pull = Pull;
+
     fn set_function(&self, pin: u8, function: PinFunction) {
         self.assert_pin(pin);
 

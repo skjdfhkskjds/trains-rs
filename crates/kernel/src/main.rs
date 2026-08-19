@@ -5,7 +5,8 @@ use core::arch::{asm, global_asm};
 use core::fmt::Write;
 use core::panic::PanicInfo;
 use trains_platform::{
-    CompareChannel, Interrupt, InterruptController as _, Platform as _, RASPI4, Timer as _,
+    InterruptController as _, Platform as _, RASPI4, Timer as _, delay::DelayNs as _,
+    raspi4::Interrupt,
 };
 
 global_asm!(include_str!("boot.S"));
@@ -22,17 +23,17 @@ pub extern "C" fn kernel_main(_dtb: usize) -> ! {
     )
     .ok();
 
-    let timer = platform.timer();
-    timer.delay_micros(1_000);
+    let mut timer = platform.timer();
+    timer.delay_us(1_000);
     writeln!(console, "trains-rs: Arm generic timer ready").ok();
 
     // Poll a real interrupt source while CPU IRQ delivery remains masked. This
     // verifies the controller wiring without requiring exception vectors yet.
     let interrupts = platform.interrupt_controller();
-    timer.clear_match(CompareChannel::One);
+    timer.cancel_deadline();
     interrupts.enable(Interrupt::PhysicalTimer);
-    timer.schedule_after(CompareChannel::One, 1_000);
-    timer.delay_micros(2_000);
+    timer.schedule_after(1_000);
+    timer.delay_us(2_000);
 
     if interrupts.is_pending(Interrupt::PhysicalTimer) {
         writeln!(console, "trains-rs: interrupt controller ready").ok();
@@ -41,7 +42,7 @@ pub extern "C" fn kernel_main(_dtb: usize) -> ! {
     }
 
     interrupts.disable(Interrupt::PhysicalTimer);
-    timer.clear_match(CompareChannel::One);
+    timer.cancel_deadline();
 
     park()
 }

@@ -1,5 +1,7 @@
+use crate::InterruptController;
 use crate::mmio::{device_barrier, read32, write32};
-use crate::{Interrupt, InterruptController};
+
+use super::Interrupt;
 
 const GICD_BASE: usize = 0xff84_1000;
 const GICC_BASE: usize = 0xff84_2000;
@@ -89,6 +91,8 @@ impl Gic400 {
 }
 
 impl InterruptController for Gic400 {
+    type Interrupt = Interrupt;
+
     fn enable(&self, interrupt: Interrupt) {
         self.configure(interrupt);
         let (register, mask) = self.bit_register(GICD_ISENABLER, interrupt);

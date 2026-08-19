@@ -7,8 +7,38 @@ mod uart;
 
 pub use gpio::Bcm2711Gpio;
 pub use interrupt::Gic400;
-pub use timer::ArmGenericTimer;
+pub use timer::ArmTimer;
 pub use uart::Pl011;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum PinFunction {
+    Input = 0b000,
+    Output = 0b001,
+    Alt5 = 0b010,
+    Alt4 = 0b011,
+    Alt0 = 0b100,
+    Alt1 = 0b101,
+    Alt2 = 0b110,
+    Alt3 = 0b111,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Pull {
+    None,
+    Down,
+    Up,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u16)]
+pub enum Interrupt {
+    PhysicalTimer = 30,
+    SystemTimer1 = 97,
+    SystemTimer3 = 99,
+    Auxiliary = 125,
+    Uart = 153,
+}
 
 use gpio::GPIO;
 use interrupt::INTERRUPTS;
@@ -27,7 +57,7 @@ pub const RASPI4: Raspi4 = Raspi4;
 impl Platform for Raspi4 {
     type Console = Pl011;
     type Gpio = Bcm2711Gpio;
-    type Timer = ArmGenericTimer;
+    type Timer = ArmTimer;
     type InterruptController = Gic400;
 
     fn init(&self) {
