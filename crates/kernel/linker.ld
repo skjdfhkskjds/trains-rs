@@ -18,6 +18,11 @@ SECTIONS
         *(.text .text.*)
     } :text
 
+    .vectors : ALIGN(2048)
+    {
+        KEEP(*(.vectors))
+    } :text
+
     .rodata : ALIGN(16)
     {
         *(.rodata .rodata.*)

@@ -11,11 +11,15 @@ use trains_platform::{
 use trains_primitives::time::Duration;
 
 global_asm!(include_str!("boot.S"));
+global_asm!(include_str!("exceptions.S"));
+
+mod exceptions;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_main(_dtb: usize) -> ! {
     let platform = RASPI4;
     platform.init();
+    exceptions::init();
 
     let mut console = platform.console();
     writeln!(
@@ -23,6 +27,12 @@ pub extern "C" fn kernel_main(_dtb: usize) -> ! {
         "trains-rs: Raspberry Pi 4 / BCM2711 platform ready"
     )
     .ok();
+
+    if exceptions::self_test() {
+        writeln!(console, "trains-rs: exception handling ready").ok();
+    } else {
+        writeln!(console, "trains-rs: exception handling self-test failed").ok();
+    }
 
     let mut timer = platform.timer();
     timer.delay_us(1_000);

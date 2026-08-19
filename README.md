@@ -28,6 +28,7 @@ Expected serial output:
 
 ```text
 trains-rs: Raspberry Pi 4 / BCM2711 platform ready
+trains-rs: exception handling ready
 trains-rs: Arm generic timer ready
 trains-rs: interrupt controller ready
 ```
@@ -62,7 +63,9 @@ devices start at `0xfe000000` and the GIC-400 starts at `0xff840000`.
 - firmware image: `kernel8.img`
 - linked/load address: `0x00080000`
 - firmware argument: device-tree address in `x0`
+- execution level: firmware EL3/EL2 entry is normalized to non-secure EL1h
 - primary core: MPIDR affinity 0; secondary cores park in `wfe`
 - peripherals: BCM2711 GPIO, PL011, Arm generic physical timer, GIC-400
-- MMU, caches, exception vectors, allocator, and SMP: not initialized
-- DAIF remains masked until exception handling is implemented
+- exception vectors: installed at EL1; synchronous exceptions capture a full general-purpose register frame
+- MMU, caches, allocator, and SMP: not initialized
+- IRQ and FIQ delivery remain masked until interrupt handling is implemented
