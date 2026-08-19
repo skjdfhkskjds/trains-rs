@@ -1,0 +1,9 @@
+[package]
+name = "trains-kernel"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+trains-platform = { path = "../platform" }
+

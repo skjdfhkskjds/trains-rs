@@ -1,9 +1,20 @@
 # trains-rs boot skeleton
 
-This repository contains the smallest useful bootstrap for a 32-bit Raspberry
-Pi 2B kernel written in Rust. It selects Rust's bare-metal Armv7-A soft-float
-target, enters through a short A32 assembly stub, clears `.bss`, establishes a
-stack, and calls Rust. The only observable behavior is one PL011 serial line.
+This repository contains the base platform for a 32-bit Raspberry Pi 2B kernel
+written in Rust. It selects Rust's bare-metal Armv7-A soft-float target, enters
+through a short A32 assembly stub, clears `.bss`, establishes a stack, and calls
+Rust. The Raspberry Pi 2 platform layer provides typed GPIO, PL011 console,
+system timer, and interrupt-controller access.
+
+The product is a Cargo workspace:
+
+- `crates/kernel` owns the boot entry point, linker layout, and kernel binary.
+- `crates/platform` is a reusable `no_std` hardware abstraction crate.
+- `xtask` is an isolated host-side helper used by `cargo image`.
+
+Kernel code selects `RASPI2B` and uses the `Platform` trait to obtain its
+console, GPIO, timer, and interrupt-controller capabilities. The concrete
+Raspberry Pi implementation exposes no public inherent device accessors.
 
 ## Build and run in QEMU
 
@@ -26,7 +37,9 @@ the Raspberry Pi firmware layout.
 Expected serial output:
 
 ```text
-trains-rs: entered Rust kernel
+trains-rs: Raspberry Pi 2 platform ready
+trains-rs: system timer ready
+trains-rs: interrupt controller ready
 ```
 
 Exit QEMU with Ctrl-C.
@@ -48,7 +61,9 @@ can carry the device-tree pointer. The Rust entry does not parse it yet.
 - linked/load address: `0x00008000`
 - early stack: 64 KiB linker-reserved `NOLOAD` region
 - primary core: MPIDR affinity 0; other QEMU cores park in `wfe`
-- MMU, caches, interrupts, allocator, exceptions, and SMP: not initialized
+- platform: GPIO, PL011, system timer, and interrupt-controller register access
+- MMU, caches, exception vectors, allocator, and SMP: not initialized
+- IRQ lines remain CPU-masked until exception handling is implemented
 
 Using soft-float avoids making FPU setup part of the initial boot contract.
 CPU-specific optimization can be enabled after the low-level VFP/NEON state is

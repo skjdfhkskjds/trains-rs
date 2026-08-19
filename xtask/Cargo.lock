@@ -3,12 +3,5 @@
 version = 4
 
 [[package]]
-name = "trains-kernel"
-version = "0.1.0"
-dependencies = [
- "trains-platform",
-]
-
-[[package]]
-name = "trains-platform"
+name = "xtask"
 version = "0.1.0"

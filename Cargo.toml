@@ -1,12 +1,12 @@
-[package]
-name = "trains-kernel"
+[workspace]
+members = ["crates/kernel", "crates/platform"]
+exclude = ["xtask"]
+default-members = ["crates/kernel"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
-
-[workspace]
-members = ["xtask"]
-default-members = ["."]
-resolver = "3"
 
 [profile.dev]
 panic = "abort"

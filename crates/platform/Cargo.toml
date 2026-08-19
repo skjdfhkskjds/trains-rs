@@ -1,0 +1,6 @@
+[package]
+name = "trains-platform"
+version.workspace = true
+edition.workspace = true
+publish = false
+
