@@ -1,5 +1,8 @@
 //! Task identity and scheduling types.
 
+use core::fmt;
+use core::num::TryFromIntError;
+
 /// Identity assigned to a kernel task.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(transparent)]
@@ -24,6 +27,26 @@ impl From<u32> for TaskId {
 impl From<TaskId> for u32 {
     fn from(value: TaskId) -> Self {
         value.get()
+    }
+}
+
+impl From<TaskId> for u64 {
+    fn from(value: TaskId) -> Self {
+        Self::from(value.get())
+    }
+}
+
+impl TryFrom<usize> for TaskId {
+    type Error = TryFromIntError;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        u32::try_from(value).map(Self::new)
+    }
+}
+
+impl fmt::Display for TaskId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
     }
 }
 

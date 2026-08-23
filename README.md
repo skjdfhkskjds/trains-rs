@@ -31,8 +31,17 @@ trains-rs: Raspberry Pi 4 / BCM2711 platform ready
 trains-rs: exception handling ready
 trains-rs: context switching ready
 trains-rs: task primitive ready
+trains-rs: cooperative scheduling ready
 trains-rs: Arm generic timer ready
 trains-rs: interrupt handling ready
+trains-rs: cooperative yield example
+task 0: before yield
+task 1: before yield
+task 2: before yield
+task 0: after yield
+task 1: after yield
+task 2: after yield
+trains-rs: cooperative yield example complete
 ```
 
 Exit QEMU with Ctrl-C.
@@ -68,9 +77,10 @@ devices start at `0xfe000000` and the GIC-400 starts at `0xff840000`.
 - execution level: firmware EL3/EL2 entry is normalized to non-secure EL1h
 - primary core: MPIDR affinity 0; secondary cores park in `wfe`
 - peripherals: BCM2711 GPIO, PL011, Arm generic physical timer, GIC-400
-- exception vectors: installed at EL1; synchronous exceptions capture a full general-purpose register frame
-- context switching: register contexts can be captured from and restored through an exception frame
+- exception vectors: installed at EL1; exceptions capture general-purpose and FP/SIMD registers
+- context switching: complete register contexts can be captured from and restored through an exception frame
 - tasks: a pinned task owns an 8 KiB stack and its initialized register context
+- scheduling: equal-priority tasks cooperatively yield through a FIFO ready queue
 - IRQ handling: GIC claims are dispatched and completed; timer IRQ delivery is enabled on demand
 - MMU, caches, allocator, and SMP: not initialized
 - IRQ delivery is enabled on demand; FIQ remains masked

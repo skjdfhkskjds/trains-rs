@@ -1,115 +1,169 @@
+//! Pinned task storage, metadata, and saved execution context.
+
 use core::arch::asm;
 use core::marker::PhantomPinned;
 use core::pin::{Pin, pin};
 
 use trains_primitives::task::{Priority, TaskId};
 
-use crate::context::RegisterContext;
+use crate::context::{ArgumentRegister, EntryPoint, RegisterContext, StackTop};
 
-pub const STACK_SIZE: usize = 8 * 1024;
+const STACK_SIZE: usize = 8 * 1024;
 
-pub type TaskEntry = extern "C" fn() -> !;
+pub(crate) type TaskEntry = extern "C" fn(TaskId) -> !;
 
 #[repr(align(16))]
 struct TaskStack([u8; STACK_SIZE]);
+
+#[derive(Clone, Copy)]
+pub(crate) struct TaskDescriptor {
+    id: TaskId,
+    parent: Option<TaskId>,
+    priority: Priority,
+    entry: TaskEntry,
+}
+
+impl TaskDescriptor {
+    pub(crate) const fn root(id: TaskId, entry: TaskEntry) -> Self {
+        Self {
+            id,
+            parent: None,
+            priority: Priority::HIGHEST,
+            entry,
+        }
+    }
+
+    const fn with_metadata(
+        id: TaskId,
+        parent: Option<TaskId>,
+        priority: Priority,
+        entry: TaskEntry,
+    ) -> Self {
+        Self {
+            id,
+            parent,
+            priority,
+            entry,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TaskState {
+    Ready,
+    Running,
+}
 
 /// One suspended execution context and the stack backing it.
 ///
 /// A task must be pinned before it is initialized because its saved stack
 /// pointer refers into its own `stack` field.
-pub struct Task {
-    id: TaskId,
-    parent: Option<TaskId>,
-    priority: Priority,
+pub(crate) struct Task {
+    descriptor: TaskDescriptor,
+    state: TaskState,
     context: RegisterContext,
     stack: TaskStack,
-    initialized: bool,
     _pinned: PhantomPinned,
 }
 
 impl Task {
-    pub const fn new(id: TaskId, parent: Option<TaskId>, priority: Priority) -> Self {
+    pub(crate) const fn new(descriptor: TaskDescriptor) -> Self {
         Self {
-            id,
-            parent,
-            priority,
-            context: RegisterContext::new(0, 0),
+            descriptor,
+            state: TaskState::Ready,
+            context: RegisterContext::empty(),
             stack: TaskStack([0; STACK_SIZE]),
-            initialized: false,
             _pinned: PhantomPinned,
         }
     }
 
-    pub fn initialize(self: Pin<&mut Self>, entry: TaskEntry) {
-        // SAFETY: `self` is pinned, and this method never move any field. The
+    pub(crate) fn initialize(self: Pin<&mut Self>) {
+        // SAFETY: `self` is pinned, and this method never moves any field. The
         // resulting context may therefore retain a pointer into `stack`.
         let task = unsafe { self.get_unchecked_mut() };
-        let (_, stack_top) = task.stack_bounds();
-        task.context = RegisterContext::new(entry as usize, stack_top);
-        task.initialized = true;
+        let stack = task.stack_bounds();
+        task.context = RegisterContext::for_task(
+            EntryPoint::new(task.descriptor.entry as usize),
+            StackTop::new(stack.top),
+        );
+        task.context
+            .set_argument(ArgumentRegister::First, u64::from(task.descriptor.id));
     }
 
-    pub const fn id(&self) -> TaskId {
-        self.id
+    pub(crate) const fn id(&self) -> TaskId {
+        self.descriptor.id
     }
 
-    pub const fn parent(&self) -> Option<TaskId> {
-        self.parent
+    pub(crate) const fn parent(&self) -> Option<TaskId> {
+        self.descriptor.parent
     }
 
-    pub const fn priority(&self) -> Priority {
-        self.priority
+    pub(crate) const fn priority(&self) -> Priority {
+        self.descriptor.priority
     }
 
-    pub const fn is_initialized(&self) -> bool {
-        self.initialized
+    pub(crate) const fn state(&self) -> TaskState {
+        self.state
     }
 
-    pub fn context(self: Pin<&Self>) -> Option<&RegisterContext> {
-        self.get_ref()
-            .initialized
-            .then_some(&self.get_ref().context)
+    pub(crate) fn set_state(self: Pin<&mut Self>, state: TaskState) {
+        // SAFETY: changing a field that does not structurally pin does not move
+        // the task or its embedded stack.
+        unsafe { self.get_unchecked_mut() }.state = state;
     }
 
-    pub fn context_mut(self: Pin<&mut Self>) -> Option<&mut RegisterContext> {
+    pub(crate) fn context(self: Pin<&Self>) -> &RegisterContext {
+        &self.get_ref().context
+    }
+
+    pub(crate) fn context_mut(self: Pin<&mut Self>) -> &mut RegisterContext {
         // SAFETY: the returned reference permits mutation but not movement of
         // the context or its pinned owning task.
-        let task = unsafe { self.get_unchecked_mut() };
-        task.initialized.then_some(&mut task.context)
+        &mut unsafe { self.get_unchecked_mut() }.context
     }
 
-    fn stack_bounds(&self) -> (usize, usize) {
+    fn stack_bounds(&self) -> StackBounds {
         let bottom = self.stack.0.as_ptr() as usize;
-        (bottom, bottom + STACK_SIZE)
+        StackBounds {
+            bottom,
+            top: bottom + STACK_SIZE,
+        }
     }
 }
 
-extern "C" fn test_entry() -> ! {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct StackBounds {
+    bottom: usize,
+    top: usize,
+}
+
+extern "C" fn test_entry(_id: TaskId) -> ! {
     loop {
         // SAFETY: this function is only used as a valid task entry point.
         unsafe { asm!("wfe", options(nomem, nostack, preserves_flags)) };
     }
 }
 
-pub fn self_test() -> bool {
+pub(crate) fn self_test() -> bool {
     let id = TaskId::new(7);
     let parent = TaskId::new(3);
     let priority = Priority::new(2);
-    let mut task = pin!(Task::new(id, Some(parent), priority));
-    task.as_mut().initialize(test_entry);
-    task.as_mut().context_mut().unwrap().set_register(0, 42);
+    let descriptor = TaskDescriptor::with_metadata(id, Some(parent), priority, test_entry);
+    let mut task = pin!(Task::new(descriptor));
+    task.as_mut().initialize();
+    task.as_mut().context_mut().set_register(0, 42);
 
     let task = task.as_ref();
-    let (stack_bottom, stack_top) = task.stack_bounds();
-    let context = task.context().unwrap();
+    let stack = task.stack_bounds();
+    let context = task.context();
 
     task.id() == id
         && task.parent() == Some(parent)
         && task.priority() == priority
-        && task.is_initialized()
+        && task.state() == TaskState::Ready
         && context.register(0) == 42
         && context.program_counter() == test_entry as *const () as usize as u64
-        && context.stack_pointer() == stack_top as u64
-        && context.stack_pointer() > stack_bottom as u64
+        && context.stack_pointer() == stack.top as u64
+        && context.stack_pointer() > stack.bottom as u64
         && context.stack_pointer() & 0xf == 0
 }

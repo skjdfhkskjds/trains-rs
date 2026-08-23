@@ -10,8 +10,13 @@ global_asm!(include_str!("boot.S"));
 global_asm!(include_str!("exceptions.S"));
 
 mod context;
+mod demo;
+mod diagnostics;
 mod exceptions;
 mod interrupts;
+mod scheduler;
+mod svc;
+mod syscall;
 mod task;
 
 #[unsafe(no_mangle)]
@@ -45,6 +50,16 @@ pub extern "C" fn kernel_main(_dtb: usize) -> ! {
         writeln!(console, "trains-rs: task primitive self-test failed").ok();
     }
 
+    if diagnostics::cooperative_scheduler::run() {
+        writeln!(console, "trains-rs: cooperative scheduling ready").ok();
+    } else {
+        writeln!(
+            console,
+            "trains-rs: cooperative scheduling self-test failed"
+        )
+        .ok();
+    }
+
     let mut timer = platform.timer();
     timer.delay_us(1_000);
     writeln!(console, "trains-rs: Arm generic timer ready").ok();
@@ -53,6 +68,13 @@ pub extern "C" fn kernel_main(_dtb: usize) -> ! {
         writeln!(console, "trains-rs: interrupt handling ready").ok();
     } else {
         writeln!(console, "trains-rs: interrupt handling self-test failed").ok();
+    }
+
+    writeln!(console, "trains-rs: cooperative yield example").ok();
+    if demo::cooperative_yield::run() {
+        writeln!(console, "trains-rs: cooperative yield example complete").ok();
+    } else {
+        writeln!(console, "trains-rs: cooperative yield example failed").ok();
     }
 
     park()

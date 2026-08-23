@@ -41,7 +41,7 @@ vector_table:
     .balign 2048
 
 .macro exception_entry vector
-    sub sp, sp, #304
+    sub sp, sp, #848
     stp x0, x1, [sp, #0]
     stp x2, x3, [sp, #16]
     stp x4, x5, [sp, #32]
@@ -73,6 +73,33 @@ vector_table:
     str x1, [sp, #288]
     str xzr, [sp, #296]
 
+    mrs x1, fpcr
+    str x1, [sp, #304]
+    mrs x1, fpsr
+    str x1, [sp, #312]
+    mrs x1, tpidr_el0
+    str x1, [sp, #320]
+    mrs x1, tpidrro_el0
+    str x1, [sp, #328]
+    stp q0, q1, [sp, #336]
+    stp q2, q3, [sp, #368]
+    stp q4, q5, [sp, #400]
+    stp q6, q7, [sp, #432]
+    stp q8, q9, [sp, #464]
+    stp q10, q11, [sp, #496]
+    stp q12, q13, [sp, #528]
+    stp q14, q15, [sp, #560]
+    stp q16, q17, [sp, #592]
+    stp q18, q19, [sp, #624]
+    stp q20, q21, [sp, #656]
+    stp q22, q23, [sp, #688]
+    stp q24, q25, [sp, #720]
+    stp q26, q27, [sp, #752]
+    stp q28, q29, [sp, #784]
+    stp q30, q31, [sp, #816]
+
+    /* Kernel state is not reentrant; preserve the prior mask in SPSR_EL1. */
+    msr daifset, #2
     mov x0, sp
     bl exception_handler
 
@@ -82,6 +109,31 @@ vector_table:
     msr elr_el1, x0
     ldr x0, [sp, #264]
     msr spsr_el1, x0
+
+    ldr x0, [sp, #304]
+    msr fpcr, x0
+    ldr x0, [sp, #312]
+    msr fpsr, x0
+    ldr x0, [sp, #320]
+    msr tpidr_el0, x0
+    ldr x0, [sp, #328]
+    msr tpidrro_el0, x0
+    ldp q30, q31, [sp, #816]
+    ldp q28, q29, [sp, #784]
+    ldp q26, q27, [sp, #752]
+    ldp q24, q25, [sp, #720]
+    ldp q22, q23, [sp, #688]
+    ldp q20, q21, [sp, #656]
+    ldp q18, q19, [sp, #624]
+    ldp q16, q17, [sp, #592]
+    ldp q14, q15, [sp, #560]
+    ldp q12, q13, [sp, #528]
+    ldp q10, q11, [sp, #496]
+    ldp q8, q9, [sp, #464]
+    ldp q6, q7, [sp, #432]
+    ldp q4, q5, [sp, #400]
+    ldp q2, q3, [sp, #368]
+    ldp q0, q1, [sp, #336]
 
     ldr x30, [sp, #240]
     ldp x28, x29, [sp, #224]
@@ -99,7 +151,7 @@ vector_table:
     ldp x4, x5, [sp, #32]
     ldp x2, x3, [sp, #16]
     ldp x0, x1, [sp, #0]
-    add sp, sp, #304
+    add sp, sp, #848
     eret
 .endm
 

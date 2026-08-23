@@ -1,3 +1,5 @@
+//! GIC interrupt dispatch and the physical-timer boot diagnostic.
+
 use core::arch::asm;
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -9,7 +11,7 @@ use trains_primitives::time::Duration;
 
 static TIMER_FIRED: AtomicBool = AtomicBool::new(false);
 
-pub fn handle() {
+pub(crate) fn handle() {
     let controller = RASPI4.interrupt_controller();
 
     while let Some(claim) = controller.claim() {
@@ -22,7 +24,7 @@ pub fn handle() {
     }
 }
 
-pub fn self_test() -> bool {
+pub(crate) fn self_test() -> bool {
     let controller = RASPI4.interrupt_controller();
     let timer = RASPI4.timer();
 

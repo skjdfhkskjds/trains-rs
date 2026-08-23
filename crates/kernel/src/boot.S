@@ -33,6 +33,10 @@ _start:
     str w1, [x0]
     dsb sy
 
+    /* Do not trap FP/SIMD access from lower exception levels. */
+    msr cptr_el3, xzr
+    isb
+
     /* AArch64 at lower exception levels, in the non-secure world. */
     mov x0, #0x411
     msr scr_el3, x0
@@ -67,6 +71,9 @@ _start:
 
 .Lenter_el1:
     msr spsel, #1
+    mov x0, #(3 << 20)
+    msr cpacr_el1, x0
+    isb
     ldr x0, =__stack_top
     mov sp, x0
 

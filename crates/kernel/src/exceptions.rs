@@ -1,13 +1,16 @@
+//! AArch64 exception-vector setup, frame layout, and central dispatch.
+
 use core::arch::asm;
 use core::fmt::Write;
+use core::mem::{offset_of, size_of};
 use core::ptr::addr_of;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use trains_platform::{Platform as _, RASPI4};
 
+use crate::svc::{KernelCall, UserCall};
+
 const SVC64_EXCEPTION_CLASS: u64 = 0x15;
-const SELF_TEST_SVC: u16 = 0x54;
-pub(crate) const CONTEXT_SELF_TEST_SVC: u16 = 0x55;
 
 static SELF_TEST_HANDLED: AtomicBool = AtomicBool::new(false);
 
@@ -36,33 +39,33 @@ enum Vector {
     LowerA32SError = 15,
 }
 
-impl Vector {
-    fn from_raw(value: u64) -> Option<Self> {
+impl TryFrom<u64> for Vector {
+    type Error = ();
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
         match value {
-            0 => Some(Self::CurrentSp0Sync),
-            1 => Some(Self::CurrentSp0Irq),
-            2 => Some(Self::CurrentSp0Fiq),
-            3 => Some(Self::CurrentSp0SError),
-            4 => Some(Self::CurrentSpxSync),
-            5 => Some(Self::CurrentSpxIrq),
-            6 => Some(Self::CurrentSpxFiq),
-            7 => Some(Self::CurrentSpxSError),
-            8 => Some(Self::LowerA64Sync),
-            9 => Some(Self::LowerA64Irq),
-            10 => Some(Self::LowerA64Fiq),
-            11 => Some(Self::LowerA64SError),
-            12 => Some(Self::LowerA32Sync),
-            13 => Some(Self::LowerA32Irq),
-            14 => Some(Self::LowerA32Fiq),
-            15 => Some(Self::LowerA32SError),
-            _ => None,
+            0 => Ok(Self::CurrentSp0Sync),
+            1 => Ok(Self::CurrentSp0Irq),
+            2 => Ok(Self::CurrentSp0Fiq),
+            3 => Ok(Self::CurrentSp0SError),
+            4 => Ok(Self::CurrentSpxSync),
+            5 => Ok(Self::CurrentSpxIrq),
+            6 => Ok(Self::CurrentSpxFiq),
+            7 => Ok(Self::CurrentSpxSError),
+            8 => Ok(Self::LowerA64Sync),
+            9 => Ok(Self::LowerA64Irq),
+            10 => Ok(Self::LowerA64Fiq),
+            11 => Ok(Self::LowerA64SError),
+            12 => Ok(Self::LowerA32Sync),
+            13 => Ok(Self::LowerA32Irq),
+            14 => Ok(Self::LowerA32Fiq),
+            15 => Ok(Self::LowerA32SError),
+            _ => Err(()),
         }
     }
+}
 
-    fn is_synchronous(self) -> bool {
-        (self as u64) & 0b11 == 0
-    }
-
+impl Vector {
     fn is_irq(self) -> bool {
         (self as u64) & 0b11 == 1
     }
@@ -78,9 +81,30 @@ pub(crate) struct ExceptionFrame {
     pub(crate) far: u64,
     pub(crate) vector: u64,
     reserved: u64,
+    pub(crate) floating_point_control: u64,
+    pub(crate) floating_point_status: u64,
+    pub(crate) thread_pointer: u64,
+    pub(crate) read_only_thread_pointer: u64,
+    pub(crate) simd: [u128; 32],
 }
 
-pub fn init() {
+const _: () = {
+    assert!(size_of::<ExceptionFrame>() == 848);
+    assert!(offset_of!(ExceptionFrame, registers) == 0);
+    assert!(offset_of!(ExceptionFrame, stack_pointer) == 248);
+    assert!(offset_of!(ExceptionFrame, elr) == 256);
+    assert!(offset_of!(ExceptionFrame, spsr) == 264);
+    assert!(offset_of!(ExceptionFrame, esr) == 272);
+    assert!(offset_of!(ExceptionFrame, far) == 280);
+    assert!(offset_of!(ExceptionFrame, vector) == 288);
+    assert!(offset_of!(ExceptionFrame, floating_point_control) == 304);
+    assert!(offset_of!(ExceptionFrame, floating_point_status) == 312);
+    assert!(offset_of!(ExceptionFrame, thread_pointer) == 320);
+    assert!(offset_of!(ExceptionFrame, read_only_thread_pointer) == 328);
+    assert!(offset_of!(ExceptionFrame, simd) == 336);
+};
+
+pub(crate) fn init() {
     let vectors = addr_of!(vector_table) as u64;
     debug_assert_eq!(vectors & 0x7ff, 0);
 
@@ -92,21 +116,21 @@ pub fn init() {
     }
 }
 
-pub fn self_test() -> bool {
+pub(crate) fn self_test() -> bool {
     SELF_TEST_HANDLED.store(false, Ordering::Relaxed);
     // SAFETY: this immediate is reserved for the exception-entry self-test.
     // The handler recognizes it and returns to the instruction after `svc`.
-    unsafe { asm!("svc #0x54", options(nomem, nostack)) };
+    unsafe { asm!("svc #{svc}", svc = const KernelCall::ExceptionSelfTest as u16) };
     SELF_TEST_HANDLED.load(Ordering::Relaxed)
 }
 
-pub fn enable_irqs() {
+pub(crate) fn enable_irqs() {
     // SAFETY: vector entry and IRQ dispatch are initialized before this is
     // called. Only the IRQ mask is changed; FIQ, SError, and debug stay masked.
     unsafe { asm!("msr daifclr, #2", options(nomem, nostack, preserves_flags)) };
 }
 
-pub fn disable_irqs() {
+pub(crate) fn disable_irqs() {
     // SAFETY: masking IRQ delivery is always safe and is used around kernel
     // state that is not yet designed for concurrent interrupt mutation.
     unsafe { asm!("msr daifset, #2", options(nomem, nostack, preserves_flags)) };
@@ -114,29 +138,45 @@ pub fn disable_irqs() {
 
 #[unsafe(no_mangle)]
 extern "C" fn exception_handler(frame: &mut ExceptionFrame) {
-    let vector = Vector::from_raw(frame.vector);
+    let vector = Vector::try_from(frame.vector).ok();
     let exception_class = frame.esr >> 26;
-    let syndrome = frame.esr as u32;
-
-    if vector.is_some_and(Vector::is_synchronous)
-        && exception_class == SVC64_EXCEPTION_CLASS
-        && syndrome as u16 == SELF_TEST_SVC
-    {
-        SELF_TEST_HANDLED.store(true, Ordering::Relaxed);
-        return;
-    }
-
-    if vector.is_some_and(Vector::is_synchronous)
-        && exception_class == SVC64_EXCEPTION_CLASS
-        && syndrome as u16 == CONTEXT_SELF_TEST_SVC
-    {
-        crate::context::handle_self_test(frame);
-        return;
-    }
+    let svc_number = frame.esr as u16;
 
     if vector.is_some_and(Vector::is_irq) {
         crate::interrupts::handle();
         return;
+    }
+
+    if exception_class == SVC64_EXCEPTION_CLASS {
+        match vector {
+            Some(Vector::CurrentSpxSync) => match KernelCall::try_from(svc_number) {
+                Ok(KernelCall::ExceptionSelfTest) => {
+                    SELF_TEST_HANDLED.store(true, Ordering::Relaxed);
+                    return;
+                }
+                Ok(KernelCall::ContextSelfTest) => {
+                    crate::context::handle_self_test(frame);
+                    return;
+                }
+                Ok(KernelCall::StartScheduler) => {
+                    crate::scheduler::start_from(frame);
+                    return;
+                }
+                Err(_) => {}
+            },
+            Some(Vector::LowerA64Sync) => match UserCall::try_from(svc_number) {
+                Ok(UserCall::Yield) => {
+                    crate::scheduler::yield_current(frame);
+                    return;
+                }
+                Ok(UserCall::Exit) => {
+                    crate::scheduler::exit_current(frame);
+                    return;
+                }
+                Err(_) => {}
+            },
+            _ => {}
+        }
     }
 
     let mut console = RASPI4.console();
