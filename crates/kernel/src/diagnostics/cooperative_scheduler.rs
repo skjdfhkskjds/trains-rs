@@ -3,7 +3,7 @@
 use core::arch::asm;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use trains_primitives::task::TaskId;
+use trains_primitives::task::{Priority, TaskId};
 
 const TRACE_LENGTH: usize = 6;
 const TASK_A_THREAD_POINTER: u64 = 0xaaaa;
@@ -65,7 +65,10 @@ pub(crate) fn run() -> bool {
         value.store(0, Ordering::Relaxed);
     }
 
-    if crate::scheduler::create(task_a).is_err() || crate::scheduler::create(task_b).is_err() {
+    let priority = Priority::new(1);
+    if crate::scheduler::create(task_a, priority).is_err()
+        || crate::scheduler::create(task_b, priority).is_err()
+    {
         return false;
     }
 

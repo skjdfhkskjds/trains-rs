@@ -4,7 +4,7 @@ use core::arch::{asm, global_asm};
 use core::fmt::Write;
 
 use trains_platform::{Platform as _, RASPI4, Raspi4, delay::DelayNs as _};
-use trains_primitives::task::TaskId;
+pub use trains_primitives::task::{Priority, TaskId};
 
 global_asm!(include_str!("boot.S"));
 global_asm!(include_str!("exceptions.S"));
@@ -78,8 +78,8 @@ pub fn initialize() -> <Raspi4 as trains_platform::Platform>::Console {
 }
 
 /// Adds an application task to the cooperative scheduler's ready queue.
-pub fn create_task(entry: TaskEntry) -> Result<TaskId, CreateError> {
-    scheduler::create(entry)
+pub fn create_task(entry: TaskEntry, priority: Priority) -> Result<TaskId, CreateError> {
+    scheduler::create(entry, priority)
 }
 
 /// Runs all ready application tasks until they have exited.

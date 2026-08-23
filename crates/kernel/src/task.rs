@@ -23,11 +23,11 @@ pub(crate) struct TaskDescriptor {
 }
 
 impl TaskDescriptor {
-    pub(crate) const fn root(id: TaskId, entry: TaskEntry) -> Self {
+    pub(crate) const fn root(id: TaskId, priority: Priority, entry: TaskEntry) -> Self {
         Self {
             id,
             parent: None,
-            priority: Priority::HIGHEST,
+            priority,
             entry,
         }
     }

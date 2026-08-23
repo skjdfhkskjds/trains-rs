@@ -7,7 +7,6 @@ publish = false
 [dependencies]
 trains-kernel = { path = "../kernel" }
 trains-platform = { path = "../platform" }
-trains-primitives = { path = "../primitives" }
 
 [[bin]]
 name = "trains-kernel"

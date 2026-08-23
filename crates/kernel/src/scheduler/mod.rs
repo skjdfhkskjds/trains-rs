@@ -1,17 +1,17 @@
-//! Single-core cooperative scheduler and its FIFO task policy.
+//! Single-core cooperative scheduler and its stable priority policy.
 //!
 //! The scheduler owns every pinned task. A run begins only through [`run`]
 //! and returns to EL1 after every participating task has exited.
 
-mod ready_queue;
+mod priority_queue;
 
 use core::arch::asm;
 use core::cell::UnsafeCell;
 use core::pin::Pin;
 
-use trains_primitives::task::TaskId;
+use trains_primitives::task::{Priority, TaskId};
 
-use self::ready_queue::ReadyQueue;
+use self::priority_queue::PriorityQueue;
 use crate::TaskEntry;
 use crate::context::{self, RegisterContext};
 use crate::exceptions::ExceptionFrame;
@@ -75,7 +75,7 @@ enum SchedulerPhase {
 
 struct Scheduler {
     tasks: [TaskSlot; MAX_TASKS],
-    ready: ReadyQueue<SlotId, MAX_TASKS>,
+    ready: PriorityQueue<SlotId, Priority, MAX_TASKS>,
     current: Option<SlotId>,
     kernel_context: RegisterContext,
     phase: SchedulerPhase,
@@ -86,7 +86,7 @@ impl Scheduler {
     const fn new() -> Self {
         Self {
             tasks: [const { TaskSlot::vacant() }; MAX_TASKS],
-            ready: ReadyQueue::new(),
+            ready: PriorityQueue::new(),
             current: None,
             kernel_context: RegisterContext::empty(),
             phase: SchedulerPhase::Idle,
@@ -94,7 +94,7 @@ impl Scheduler {
         }
     }
 
-    fn create(&mut self, entry: TaskEntry) -> Result<TaskId, CreateError> {
+    fn create(&mut self, entry: TaskEntry, priority: Priority) -> Result<TaskId, CreateError> {
         if self.phase == SchedulerPhase::Running {
             return Err(CreateError::SchedulerRunning);
         }
@@ -107,9 +107,9 @@ impl Scheduler {
             .ok_or(CreateError::CapacityReached)?;
         let id = TaskId::try_from(slot.index()).map_err(|_| CreateError::TaskIdUnavailable)?;
 
-        self.tasks[slot.index()].occupy(TaskDescriptor::root(id, entry));
+        self.tasks[slot.index()].occupy(TaskDescriptor::root(id, priority, entry));
         self.ready
-            .push_back(slot)
+            .push(slot, priority)
             .expect("a vacant task slot guarantees ready-queue capacity");
         Ok(id)
     }
@@ -147,9 +147,10 @@ impl Scheduler {
     }
 
     fn dispatch_next(&mut self, frame: &mut ExceptionFrame) {
-        let next = self.ready.pop_front().expect("no task is ready");
+        let (next, priority) = self.ready.pop().expect("no task is ready");
         let mut task = self.tasks[next.index()].task_mut();
         debug_assert_eq!(task.state(), TaskState::Ready);
+        debug_assert_eq!(task.priority(), priority);
         task.as_mut().set_state(TaskState::Running);
         self.current = Some(next);
         context::restore(frame, task.as_ref().context());
@@ -167,8 +168,9 @@ impl Scheduler {
         let current = self.current.take().expect("yield without a running task");
         let mut task = self.tasks[current.index()].task_mut();
         task.as_mut().set_state(TaskState::Ready);
+        let priority = task.priority();
         self.ready
-            .push_back(current)
+            .push(current, priority)
             .expect("the running task leaves one ready-queue position free");
         self.dispatch_next(frame);
     }
@@ -225,8 +227,8 @@ impl RunOutcome {
     }
 }
 
-pub(crate) fn create(entry: TaskEntry) -> Result<TaskId, CreateError> {
-    with_scheduler(|scheduler| scheduler.create(entry))
+pub(crate) fn create(entry: TaskEntry, priority: Priority) -> Result<TaskId, CreateError> {
+    with_scheduler(|scheduler| scheduler.create(entry, priority))
 }
 
 pub(crate) fn run() -> Result<RunOutcome, RunError> {

@@ -37,12 +37,12 @@ trains-rs: Arm generic timer ready
 trains-rs: interrupt handling ready
 trains-rs> demo
 trains-rs: cooperative yield example
-task 0: before yield
-task 1: before yield
-task 2: before yield
-task 0: after yield
-task 1: after yield
-task 2: after yield
+task 0 (priority 0): before yield
+task 0 (priority 0): after yield
+task 1 (priority 1): before yield
+task 1 (priority 1): after yield
+task 2 (priority 2): before yield
+task 2 (priority 2): after yield
 trains-rs: cooperative yield example complete
 trains-rs>
 ```
@@ -85,7 +85,7 @@ devices start at `0xfe000000` and the GIC-400 starts at `0xff840000`.
 - exception vectors: installed at EL1; exceptions capture general-purpose and FP/SIMD registers
 - context switching: complete register contexts can be captured from and restored through an exception frame
 - tasks: a pinned task owns an 8 KiB stack and its initialized register context
-- scheduling: equal-priority tasks cooperatively yield through a FIFO ready queue
+- scheduling: lower-valued priorities run first; equal priorities use FIFO ordering
 - IRQ handling: GIC claims are dispatched and completed; timer IRQ delivery is enabled on demand
 - MMU, caches, allocator, and SMP: not initialized
 - IRQ delivery is enabled on demand; FIQ remains masked
