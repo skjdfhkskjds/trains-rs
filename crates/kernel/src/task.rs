@@ -6,11 +6,10 @@ use core::pin::{Pin, pin};
 
 use trains_primitives::task::{Priority, TaskId};
 
+use crate::TaskEntry;
 use crate::context::{ArgumentRegister, EntryPoint, RegisterContext, StackTop};
 
 const STACK_SIZE: usize = 8 * 1024;
-
-pub(crate) type TaskEntry = extern "C" fn(TaskId) -> !;
 
 #[repr(align(16))]
 struct TaskStack([u8; STACK_SIZE]);

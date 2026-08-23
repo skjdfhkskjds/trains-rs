@@ -1,13 +1,16 @@
 [package]
-name = "trains-kernel"
+name = "trains-application"
 version.workspace = true
 edition.workspace = true
 publish = false
 
 [dependencies]
+trains-kernel = { path = "../kernel" }
 trains-platform = { path = "../platform" }
 trains-primitives = { path = "../primitives" }
 
-[lib]
+[[bin]]
+name = "trains-kernel"
+path = "src/main.rs"
 test = false
 bench = false

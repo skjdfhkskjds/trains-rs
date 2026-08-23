@@ -3,7 +3,7 @@ use core::fmt;
 
 use crate::io::{ErrorType, Read, ReadReady, Write, WriteReady};
 use crate::mmio::{device_barrier, read32, write32};
-use crate::{Console, Gpio};
+use crate::{Console, Gpio, InterruptSource};
 
 use super::gpio::Bcm2711Gpio;
 use super::{PERIPHERAL_BASE, PinFunction, Pull};
@@ -71,7 +71,11 @@ impl Pl011 {
     }
 }
 
-impl Console for Pl011 {
+impl Console for Pl011 {}
+
+impl InterruptSource for Pl011 {
+    type Mask = u32;
+
     fn set_interrupt_mask(&self, mask: u32) {
         self.write_register(IMSC, mask & ALL_INTERRUPTS);
     }

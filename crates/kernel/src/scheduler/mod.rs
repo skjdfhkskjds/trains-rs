@@ -12,10 +12,11 @@ use core::pin::Pin;
 use trains_primitives::task::TaskId;
 
 use self::ready_queue::ReadyQueue;
+use crate::TaskEntry;
 use crate::context::{self, RegisterContext};
 use crate::exceptions::ExceptionFrame;
 use crate::svc::KernelCall;
-use crate::task::{Task, TaskDescriptor, TaskEntry, TaskState};
+use crate::task::{Task, TaskDescriptor, TaskState};
 
 const MAX_TASKS: usize = 16;
 
@@ -201,25 +202,25 @@ fn with_scheduler<R>(operation: impl FnOnce(&mut Scheduler) -> R) -> R {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CreateError {
+pub enum CreateError {
     CapacityReached,
     SchedulerRunning,
     TaskIdUnavailable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RunError {
+pub enum RunError {
     AlreadyRunning,
     NoReadyTasks,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RunOutcome {
+pub struct RunOutcome {
     exited_tasks: usize,
 }
 
 impl RunOutcome {
-    pub(crate) const fn exited_tasks(self) -> usize {
+    pub const fn exited_tasks(self) -> usize {
         self.exited_tasks
     }
 }

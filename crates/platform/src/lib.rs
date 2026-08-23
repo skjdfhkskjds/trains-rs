@@ -14,9 +14,15 @@ pub use raspi4::{RASPI4, Raspi4};
 pub trait Console:
     Copy + fmt::Write + io::Read + io::Write + io::ReadReady + io::WriteReady
 {
-    fn set_interrupt_mask(&self, mask: u32);
-    fn masked_interrupt_status(&self) -> u32;
-    fn clear_interrupts(&self, mask: u32);
+    /// Blocks until one byte is available from the console.
+    fn read_byte(&mut self) -> Result<u8, <Self as io::ErrorType>::Error> {
+        let mut byte = [0];
+        loop {
+            if self.read(&mut byte)? == 1 {
+                return Ok(byte[0]);
+            }
+        }
+    }
 }
 
 pub trait Gpio: Copy {
@@ -46,6 +52,15 @@ pub trait InterruptController: Copy {
     fn is_pending(&self, interrupt: Self::Interrupt) -> bool;
     fn claim(&self) -> Option<Self::Claim>;
     fn complete(&self, claim: Self::Claim);
+}
+
+/// Interrupt controls exposed by an interrupt-producing peripheral.
+pub trait InterruptSource: Copy {
+    type Mask: Copy;
+
+    fn set_interrupt_mask(&self, mask: Self::Mask);
+    fn masked_interrupt_status(&self) -> Self::Mask;
+    fn clear_interrupts(&self, mask: Self::Mask);
 }
 
 pub trait InterruptClaim: Copy {

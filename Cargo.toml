@@ -1,7 +1,12 @@
 [workspace]
-members = ["crates/kernel", "crates/platform", "crates/primitives"]
+members = [
+    "crates/application",
+    "crates/kernel",
+    "crates/platform",
+    "crates/primitives",
+]
 exclude = ["xtask"]
-default-members = ["crates/kernel"]
+default-members = ["crates/application"]
 resolver = "3"
 
 [workspace.package]
