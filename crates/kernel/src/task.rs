@@ -128,41 +128,42 @@ impl Task {
             top: bottom + STACK_SIZE,
         }
     }
+
+    extern "C" fn test_entry(_id: TaskId) -> ! {
+        loop {
+            // SAFETY: this function is only used as a valid task entry point.
+            unsafe { asm!("wfe", options(nomem, nostack, preserves_flags)) };
+        }
+    }
+
+    pub(crate) fn self_test() -> bool {
+        let id = TaskId::new(7);
+        let parent = TaskId::new(3);
+        let priority = Priority::new(2);
+        let descriptor =
+            TaskDescriptor::with_metadata(id, Some(parent), priority, Self::test_entry);
+        let mut task = pin!(Self::new(descriptor));
+        task.as_mut().initialize();
+        task.as_mut().context_mut().set_register(0, 42);
+
+        let task = task.as_ref();
+        let stack = task.stack_bounds();
+        let context = task.context();
+
+        task.id() == id
+            && task.parent() == Some(parent)
+            && task.priority() == priority
+            && task.state() == TaskState::Ready
+            && context.register(0) == 42
+            && context.program_counter() == Self::test_entry as *const () as usize as u64
+            && context.stack_pointer() == stack.top as u64
+            && context.stack_pointer() > stack.bottom as u64
+            && context.stack_pointer() & 0xf == 0
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct StackBounds {
     bottom: usize,
     top: usize,
-}
-
-extern "C" fn test_entry(_id: TaskId) -> ! {
-    loop {
-        // SAFETY: this function is only used as a valid task entry point.
-        unsafe { asm!("wfe", options(nomem, nostack, preserves_flags)) };
-    }
-}
-
-pub(crate) fn self_test() -> bool {
-    let id = TaskId::new(7);
-    let parent = TaskId::new(3);
-    let priority = Priority::new(2);
-    let descriptor = TaskDescriptor::with_metadata(id, Some(parent), priority, test_entry);
-    let mut task = pin!(Task::new(descriptor));
-    task.as_mut().initialize();
-    task.as_mut().context_mut().set_register(0, 42);
-
-    let task = task.as_ref();
-    let stack = task.stack_bounds();
-    let context = task.context();
-
-    task.id() == id
-        && task.parent() == Some(parent)
-        && task.priority() == priority
-        && task.state() == TaskState::Ready
-        && context.register(0) == 42
-        && context.program_counter() == test_entry as *const () as usize as u64
-        && context.stack_pointer() == stack.top as u64
-        && context.stack_pointer() > stack.bottom as u64
-        && context.stack_pointer() & 0xf == 0
 }

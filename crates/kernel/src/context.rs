@@ -12,8 +12,6 @@ const EL0T_WITH_EXCEPTIONS_MASKED: u64 = 0x3c0;
 const TEST_INPUT: u64 = 0x1234_5678_9abc_def0;
 const TEST_OUTPUT: u64 = 0xfedc_ba98_7654_3210;
 
-static SELF_TEST_HANDLED: AtomicBool = AtomicBool::new(false);
-
 /// Address at which a newly restored execution context begins.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct EntryPoint(usize);
@@ -137,61 +135,76 @@ impl RegisterContext {
     }
 }
 
-/// Saves the interrupted context and selects the context restored by `eret`.
-pub(crate) fn switch(
-    frame: &mut ExceptionFrame,
-    outgoing: &mut RegisterContext,
-    incoming: &RegisterContext,
-) {
-    save(frame, outgoing);
-    restore(frame, incoming);
+/// Owns context transfers and their boot-time diagnostic state.
+pub(crate) struct ContextSwitcher {
+    self_test_handled: AtomicBool,
 }
 
-pub(crate) fn save(frame: &ExceptionFrame, context: &mut RegisterContext) {
-    *context = RegisterContext::capture(frame);
-}
+impl ContextSwitcher {
+    pub(crate) const fn new() -> Self {
+        Self {
+            self_test_handled: AtomicBool::new(false),
+        }
+    }
 
-pub(crate) fn restore(frame: &mut ExceptionFrame, context: &RegisterContext) {
-    context.restore(frame);
-}
+    /// Saves the interrupted context and selects the context restored by `eret`.
+    pub(crate) fn switch(
+        &self,
+        frame: &mut ExceptionFrame,
+        outgoing: &mut RegisterContext,
+        incoming: &RegisterContext,
+    ) {
+        self.save(frame, outgoing);
+        self.restore(frame, incoming);
+    }
 
-pub(crate) fn handle_self_test(frame: &mut ExceptionFrame) {
-    let expected_stack_pointer = frame.stack_pointer;
-    let expected_program_counter = frame.elr;
-    let expected_processor_state = frame.spsr;
-    let expected_floating_point_control = frame.floating_point_control;
-    let expected_floating_point_status = frame.floating_point_status;
-    let expected_thread_pointer = frame.thread_pointer;
-    let expected_read_only_thread_pointer = frame.read_only_thread_pointer;
-    let mut incoming = RegisterContext::capture(frame);
-    incoming.set_register(0, TEST_OUTPUT);
+    pub(crate) fn save(&self, frame: &ExceptionFrame, context: &mut RegisterContext) {
+        *context = RegisterContext::capture(frame);
+    }
 
-    let mut outgoing = RegisterContext::empty();
-    switch(frame, &mut outgoing, &incoming);
-    let context_matches = outgoing.register(0) == TEST_INPUT
-        && outgoing.stack_pointer() == expected_stack_pointer
-        && outgoing.program_counter() == expected_program_counter
-        && outgoing.processor_state() == expected_processor_state
-        && outgoing.floating_point_control == expected_floating_point_control
-        && outgoing.floating_point_status == expected_floating_point_status
-        && outgoing.thread_pointer == expected_thread_pointer
-        && outgoing.read_only_thread_pointer == expected_read_only_thread_pointer;
-    SELF_TEST_HANDLED.store(context_matches, Ordering::Relaxed);
-}
+    pub(crate) fn restore(&self, frame: &mut ExceptionFrame, context: &RegisterContext) {
+        context.restore(frame);
+    }
 
-pub(crate) fn self_test() -> bool {
-    SELF_TEST_HANDLED.store(false, Ordering::Relaxed);
-    let result: u64;
+    pub(crate) fn handle_self_test(&self, frame: &mut ExceptionFrame) {
+        let expected_stack_pointer = frame.stack_pointer;
+        let expected_program_counter = frame.elr;
+        let expected_processor_state = frame.spsr;
+        let expected_floating_point_control = frame.floating_point_control;
+        let expected_floating_point_status = frame.floating_point_status;
+        let expected_thread_pointer = frame.thread_pointer;
+        let expected_read_only_thread_pointer = frame.read_only_thread_pointer;
+        let mut incoming = RegisterContext::capture(frame);
+        incoming.set_register(0, TEST_OUTPUT);
 
-    // SAFETY: the dedicated SVC handler saves this context, substitutes x0 in
-    // the restored context, and resumes at the instruction following `svc`.
-    unsafe {
-        asm!(
-            "svc #{svc}",
-            svc = const KernelCall::ContextSelfTest as u16,
-            inout("x0") TEST_INPUT => result,
-        )
-    };
+        let mut outgoing = RegisterContext::empty();
+        self.switch(frame, &mut outgoing, &incoming);
+        let context_matches = outgoing.register(0) == TEST_INPUT
+            && outgoing.stack_pointer() == expected_stack_pointer
+            && outgoing.program_counter() == expected_program_counter
+            && outgoing.processor_state() == expected_processor_state
+            && outgoing.floating_point_control == expected_floating_point_control
+            && outgoing.floating_point_status == expected_floating_point_status
+            && outgoing.thread_pointer == expected_thread_pointer
+            && outgoing.read_only_thread_pointer == expected_read_only_thread_pointer;
+        self.self_test_handled
+            .store(context_matches, Ordering::Relaxed);
+    }
 
-    SELF_TEST_HANDLED.load(Ordering::Relaxed) && result == TEST_OUTPUT
+    pub(crate) fn self_test(&self) -> bool {
+        self.self_test_handled.store(false, Ordering::Relaxed);
+        let result: u64;
+
+        // SAFETY: the SVC handler saves this context, substitutes x0 in the
+        // restored context, and resumes after the `svc` instruction.
+        unsafe {
+            asm!(
+                "svc #{svc}",
+                svc = const KernelCall::ContextSelfTest as u16,
+                inout("x0") TEST_INPUT => result,
+            )
+        };
+
+        self.self_test_handled.load(Ordering::Relaxed) && result == TEST_OUTPUT
+    }
 }

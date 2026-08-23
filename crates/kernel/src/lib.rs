@@ -16,7 +16,6 @@ mod interrupts;
 pub mod runtime;
 mod scheduler;
 mod svc;
-mod syscall;
 mod task;
 
 pub type TaskEntry = extern "C" fn(TaskId) -> !;
@@ -28,6 +27,11 @@ pub use scheduler::{CreateError, RunError, RunOutcome};
 /// Initialized kernel services available to the application layer.
 pub struct Kernel<P: Platform> {
     platform: P,
+    context_switcher: context::ContextSwitcher,
+    exception_handler: exceptions::ExceptionHandler,
+    interrupt_handler: interrupts::InterruptHandler,
+    scheduler_diagnostic:
+        &'static diagnostics::cooperative_scheduler::CooperativeSchedulerDiagnostic,
     scheduler: &'static scheduler::Scheduler,
 }
 
@@ -36,6 +40,10 @@ impl<P: Platform> Kernel<P> {
     pub const fn new(platform: P) -> Self {
         Self {
             platform,
+            context_switcher: context::ContextSwitcher::new(),
+            exception_handler: exceptions::ExceptionHandler::new(),
+            interrupt_handler: interrupts::InterruptHandler::new(),
+            scheduler_diagnostic: &diagnostics::cooperative_scheduler::COOPERATIVE_SCHEDULER,
             scheduler: &scheduler::SCHEDULER,
         }
     }
@@ -43,7 +51,7 @@ impl<P: Platform> Kernel<P> {
     /// Initializes the platform and kernel facilities needed by applications.
     pub fn initialize(&self) {
         self.platform.init();
-        exceptions::init();
+        self.exception_handler.init();
 
         let mut console = self.console();
         writeln!(
@@ -52,25 +60,25 @@ impl<P: Platform> Kernel<P> {
         )
         .ok();
 
-        if exceptions::self_test() {
+        if self.exception_handler.self_test() {
             writeln!(console, "trains-rs: exception handling ready").ok();
         } else {
             writeln!(console, "trains-rs: exception handling self-test failed").ok();
         }
 
-        if context::self_test() {
+        if self.context_switcher.self_test() {
             writeln!(console, "trains-rs: context switching ready").ok();
         } else {
             writeln!(console, "trains-rs: context switching self-test failed").ok();
         }
 
-        if task::self_test() {
+        if task::Task::self_test() {
             writeln!(console, "trains-rs: task primitive ready").ok();
         } else {
             writeln!(console, "trains-rs: task primitive self-test failed").ok();
         }
 
-        if diagnostics::cooperative_scheduler::run() {
+        if self.scheduler_diagnostic.run(self.scheduler) {
             writeln!(console, "trains-rs: cooperative scheduling ready").ok();
         } else {
             writeln!(
@@ -84,7 +92,10 @@ impl<P: Platform> Kernel<P> {
         timer.delay_us(1_000);
         writeln!(console, "trains-rs: Arm generic timer ready").ok();
 
-        if interrupts::self_test(self.platform) {
+        if self
+            .interrupt_handler
+            .self_test(self.platform, &self.exception_handler)
+        {
             writeln!(console, "trains-rs: interrupt handling ready").ok();
         } else {
             writeln!(console, "trains-rs: interrupt handling self-test failed").ok();
@@ -109,7 +120,7 @@ impl<P: Platform> Kernel<P> {
     /// Dispatches an exception delivered by the architecture entry stub.
     #[doc(hidden)]
     pub fn handle_exception(&self, frame: &mut ExceptionFrame) {
-        exceptions::handle(self, frame);
+        self.exception_handler.handle(self, frame);
     }
 
     /// Enters the kernel's terminal idle state.
@@ -127,11 +138,17 @@ pub struct CurrentTask;
 impl CurrentTask {
     /// Places the current task at the back of its priority level.
     pub fn yield_now() {
-        syscall::yield_now();
+        // SAFETY: the kernel installs a handler for this SVC before tasks run.
+        unsafe { asm!("svc #{svc}", svc = const svc::UserCall::Yield as u16) };
     }
 
     /// Permanently exits the current task.
     pub fn exit() -> ! {
-        syscall::exit()
+        // SAFETY: the kernel installs a handler for this SVC before tasks run.
+        // A correctly handled exit never restores this task's context.
+        unsafe { asm!("svc #{svc}", svc = const svc::UserCall::Exit as u16) };
+        loop {
+            core::hint::spin_loop();
+        }
     }
 }

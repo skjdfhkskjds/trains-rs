@@ -1,7 +1,7 @@
 //! Single-core cooperative scheduler and its stable priority policy.
 //!
-//! The scheduler owns every pinned task. A run begins only through [`run`]
-//! and returns to EL1 after every participating task has exited.
+//! The scheduler owns every pinned task. A run begins only through
+//! [`Scheduler::run`] and returns to EL1 after every task has exited.
 
 mod priority_queue;
 
@@ -13,7 +13,7 @@ use trains_primitives::task::{Priority, TaskId};
 
 use self::priority_queue::PriorityQueue;
 use crate::TaskEntry;
-use crate::context::{self, RegisterContext};
+use crate::context::{ContextSwitcher, RegisterContext};
 use crate::exceptions::ExceptionFrame;
 use crate::svc::KernelCall;
 use crate::task::{Task, TaskDescriptor, TaskState};
@@ -139,32 +139,32 @@ impl SchedulerState {
         }
     }
 
-    fn save_current(&mut self, frame: &ExceptionFrame) {
+    fn save_current(&mut self, contexts: &ContextSwitcher, frame: &ExceptionFrame) {
         let current = self.current.expect("yield without a running task");
         let mut task = self.tasks[current.index()].task_mut();
         debug_assert_eq!(task.state(), TaskState::Running);
-        context::save(frame, task.as_mut().context_mut());
+        contexts.save(frame, task.as_mut().context_mut());
     }
 
-    fn dispatch_next(&mut self, frame: &mut ExceptionFrame) {
+    fn dispatch_next(&mut self, contexts: &ContextSwitcher, frame: &mut ExceptionFrame) {
         let (next, priority) = self.ready.pop().expect("no task is ready");
         let mut task = self.tasks[next.index()].task_mut();
         debug_assert_eq!(task.state(), TaskState::Ready);
         debug_assert_eq!(task.priority(), priority);
         task.as_mut().set_state(TaskState::Running);
         self.current = Some(next);
-        context::restore(frame, task.as_ref().context());
+        contexts.restore(frame, task.as_ref().context());
     }
 
-    fn start(&mut self, frame: &mut ExceptionFrame) {
+    fn start(&mut self, contexts: &ContextSwitcher, frame: &mut ExceptionFrame) {
         assert_eq!(self.phase, SchedulerPhase::Running);
         assert!(self.current.is_none());
-        context::save(frame, &mut self.kernel_context);
-        self.dispatch_next(frame);
+        contexts.save(frame, &mut self.kernel_context);
+        self.dispatch_next(contexts, frame);
     }
 
-    fn yield_current(&mut self, frame: &mut ExceptionFrame) {
-        self.save_current(frame);
+    fn yield_current(&mut self, contexts: &ContextSwitcher, frame: &mut ExceptionFrame) {
+        self.save_current(contexts, frame);
         let current = self.current.take().expect("yield without a running task");
         let mut task = self.tasks[current.index()].task_mut();
         task.as_mut().set_state(TaskState::Ready);
@@ -172,19 +172,19 @@ impl SchedulerState {
         self.ready
             .push(current, priority)
             .expect("the running task leaves one ready-queue position free");
-        self.dispatch_next(frame);
+        self.dispatch_next(contexts, frame);
     }
 
-    fn exit_current(&mut self, frame: &mut ExceptionFrame) {
+    fn exit_current(&mut self, contexts: &ContextSwitcher, frame: &mut ExceptionFrame) {
         let current = self.current.take().expect("exit without a running task");
         self.tasks[current.index()].vacate();
         self.exited_tasks += 1;
 
         if self.ready.is_empty() {
             self.phase = SchedulerPhase::Idle;
-            context::restore(frame, &self.kernel_context);
+            contexts.restore(frame, &self.kernel_context);
         } else {
-            self.dispatch_next(frame);
+            self.dispatch_next(contexts, frame);
         }
     }
 }
@@ -227,16 +227,16 @@ impl Scheduler {
         Ok(self.with_state(SchedulerState::complete_run))
     }
 
-    pub(crate) fn start_from(&self, frame: &mut ExceptionFrame) {
-        self.with_state(|scheduler| scheduler.start(frame));
+    pub(crate) fn start_from(&self, contexts: &ContextSwitcher, frame: &mut ExceptionFrame) {
+        self.with_state(|scheduler| scheduler.start(contexts, frame));
     }
 
-    pub(crate) fn yield_current(&self, frame: &mut ExceptionFrame) {
-        self.with_state(|scheduler| scheduler.yield_current(frame));
+    pub(crate) fn yield_current(&self, contexts: &ContextSwitcher, frame: &mut ExceptionFrame) {
+        self.with_state(|scheduler| scheduler.yield_current(contexts, frame));
     }
 
-    pub(crate) fn exit_current(&self, frame: &mut ExceptionFrame) {
-        self.with_state(|scheduler| scheduler.exit_current(frame));
+    pub(crate) fn exit_current(&self, contexts: &ContextSwitcher, frame: &mut ExceptionFrame) {
+        self.with_state(|scheduler| scheduler.exit_current(contexts, frame));
     }
 }
 

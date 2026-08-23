@@ -13,8 +13,6 @@ use crate::svc::{KernelCall, UserCall};
 
 const SVC64_EXCEPTION_CLASS: u64 = 0x15;
 
-static SELF_TEST_HANDLED: AtomicBool = AtomicBool::new(false);
-
 unsafe extern "C" {
     static vector_table: u8;
 }
@@ -105,90 +103,161 @@ const _: () = {
     assert!(offset_of!(ExceptionFrame, simd) == 336);
 };
 
-pub(crate) fn init() {
-    let vectors = addr_of!(vector_table) as u64;
-    debug_assert_eq!(vectors & 0x7ff, 0);
-
-    // SAFETY: `vector_table` is a 2 KiB-aligned, statically allocated AArch64
-    // vector table that remains valid for the lifetime of the kernel.
-    unsafe {
-        asm!("msr vbar_el1, {vectors}", vectors = in(reg) vectors, options(nostack));
-        asm!("isb", options(nostack, preserves_flags));
-    }
+/// Owns exception-vector setup, masking, diagnostics, and dispatch.
+pub(crate) struct ExceptionHandler {
+    self_test_handled: AtomicBool,
 }
 
-pub(crate) fn self_test() -> bool {
-    SELF_TEST_HANDLED.store(false, Ordering::Relaxed);
-    // SAFETY: this immediate is reserved for the exception-entry self-test.
-    // The handler recognizes it and returns to the instruction after `svc`.
-    unsafe { asm!("svc #{svc}", svc = const KernelCall::ExceptionSelfTest as u16) };
-    SELF_TEST_HANDLED.load(Ordering::Relaxed)
-}
-
-pub(crate) fn enable_irqs() {
-    // SAFETY: vector entry and IRQ dispatch are initialized before this is
-    // called. Only the IRQ mask is changed; FIQ, SError, and debug stay masked.
-    unsafe { asm!("msr daifclr, #2", options(nomem, nostack, preserves_flags)) };
-}
-
-pub(crate) fn disable_irqs() {
-    // SAFETY: masking IRQ delivery is always safe and is used around kernel
-    // state that is not yet designed for concurrent interrupt mutation.
-    unsafe { asm!("msr daifset, #2", options(nomem, nostack, preserves_flags)) };
-}
-
-pub(crate) fn handle<P: Platform>(kernel: &Kernel<P>, frame: &mut ExceptionFrame) {
-    let vector = Vector::try_from(frame.vector).ok();
-    let exception_class = frame.esr >> 26;
-    let svc_number = frame.esr as u16;
-
-    if vector.is_some_and(Vector::is_irq) {
-        crate::interrupts::handle(kernel.platform);
-        return;
-    }
-
-    if exception_class == SVC64_EXCEPTION_CLASS {
-        match vector {
-            Some(Vector::CurrentSpxSync) => match KernelCall::try_from(svc_number) {
-                Ok(KernelCall::ExceptionSelfTest) => {
-                    SELF_TEST_HANDLED.store(true, Ordering::Relaxed);
-                    return;
-                }
-                Ok(KernelCall::ContextSelfTest) => {
-                    crate::context::handle_self_test(frame);
-                    return;
-                }
-                Ok(KernelCall::StartScheduler) => {
-                    kernel.scheduler.start_from(frame);
-                    return;
-                }
-                Err(_) => {}
-            },
-            Some(Vector::LowerA64Sync) => match UserCall::try_from(svc_number) {
-                Ok(UserCall::Yield) => {
-                    kernel.scheduler.yield_current(frame);
-                    return;
-                }
-                Ok(UserCall::Exit) => {
-                    kernel.scheduler.exit_current(frame);
-                    return;
-                }
-                Err(_) => {}
-            },
-            _ => {}
+impl ExceptionHandler {
+    pub(crate) const fn new() -> Self {
+        Self {
+            self_test_handled: AtomicBool::new(false),
         }
     }
 
-    let mut console = kernel.console();
-    writeln!(console, "trains-rs: unhandled exception").ok();
-    writeln!(console, "  vector: {:?}", vector).ok();
-    writeln!(console, "  elr:    {:#018x}", frame.elr).ok();
-    writeln!(console, "  spsr:   {:#018x}", frame.spsr).ok();
-    writeln!(console, "  esr:    {:#018x}", frame.esr).ok();
-    writeln!(console, "  far:    {:#018x}", frame.far).ok();
+    pub(crate) fn init(&self) {
+        let vectors = addr_of!(vector_table) as u64;
+        debug_assert_eq!(vectors & 0x7ff, 0);
 
-    loop {
-        // SAFETY: an unhandled exception is fatal until a kernel policy exists.
-        unsafe { asm!("wfe", options(nomem, nostack, preserves_flags)) };
+        // SAFETY: `vector_table` is a 2 KiB-aligned, statically allocated
+        // AArch64 vector table that remains valid for the kernel's lifetime.
+        unsafe {
+            asm!("msr vbar_el1, {vectors}", vectors = in(reg) vectors, options(nostack));
+            asm!("isb", options(nostack, preserves_flags));
+        }
+    }
+
+    pub(crate) fn self_test(&self) -> bool {
+        self.self_test_handled.store(false, Ordering::Relaxed);
+        // SAFETY: this immediate is reserved for the exception-entry self-test.
+        // The handler recognizes it and returns after the `svc` instruction.
+        unsafe { asm!("svc #{svc}", svc = const KernelCall::ExceptionSelfTest as u16) };
+        self.self_test_handled.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn enable(&self) {
+        // SAFETY: vector entry and IRQ dispatch are initialized before this is
+        // called. Only IRQ is unmasked; FIQ, SError, and debug stay masked.
+        unsafe { asm!("msr daifclr, #2", options(nomem, nostack, preserves_flags)) };
+    }
+
+    pub(crate) fn disable(&self) {
+        // SAFETY: masking IRQ delivery is always safe and protects kernel state
+        // that is not yet designed for concurrent interrupt mutation.
+        unsafe { asm!("msr daifset, #2", options(nomem, nostack, preserves_flags)) };
+    }
+
+    pub(crate) fn handle<P: Platform>(&self, kernel: &Kernel<P>, frame: &mut ExceptionFrame) {
+        let vector = Vector::try_from(frame.vector).ok();
+
+        if vector.is_some_and(Vector::is_irq) {
+            kernel.interrupt_handler.handle(kernel.platform);
+            return;
+        }
+
+        let exception_class = frame.esr >> 26;
+        let svc_number = frame.esr as u16;
+        if exception_class == SVC64_EXCEPTION_CLASS
+            && self.handle_supervisor_call(kernel, frame, vector, svc_number)
+        {
+            return;
+        }
+
+        self.handle_unhandled(kernel, frame, vector);
+    }
+
+    fn handle_supervisor_call<P: Platform>(
+        &self,
+        kernel: &Kernel<P>,
+        frame: &mut ExceptionFrame,
+        vector: Option<Vector>,
+        number: u16,
+    ) -> bool {
+        match vector {
+            Some(Vector::CurrentSpxSync) => self.decode_kernel_call(kernel, frame, number),
+            Some(Vector::LowerA64Sync) => self.decode_user_call(kernel, frame, number),
+            _ => false,
+        }
+    }
+
+    fn decode_kernel_call<P: Platform>(
+        &self,
+        kernel: &Kernel<P>,
+        frame: &mut ExceptionFrame,
+        number: u16,
+    ) -> bool {
+        match KernelCall::try_from(number) {
+            Ok(call) => {
+                self.handle_kernel_call(kernel, frame, call);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    fn handle_kernel_call<P: Platform>(
+        &self,
+        kernel: &Kernel<P>,
+        frame: &mut ExceptionFrame,
+        call: KernelCall,
+    ) {
+        match call {
+            KernelCall::ExceptionSelfTest => self.self_test_handled.store(true, Ordering::Relaxed),
+            KernelCall::ContextSelfTest => kernel.context_switcher.handle_self_test(frame),
+            KernelCall::StartScheduler => {
+                kernel.scheduler.start_from(&kernel.context_switcher, frame)
+            }
+        }
+    }
+
+    fn decode_user_call<P: Platform>(
+        &self,
+        kernel: &Kernel<P>,
+        frame: &mut ExceptionFrame,
+        number: u16,
+    ) -> bool {
+        match UserCall::try_from(number) {
+            Ok(call) => {
+                self.handle_user_call(kernel, frame, call);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    fn handle_user_call<P: Platform>(
+        &self,
+        kernel: &Kernel<P>,
+        frame: &mut ExceptionFrame,
+        call: UserCall,
+    ) {
+        match call {
+            UserCall::Yield => kernel
+                .scheduler
+                .yield_current(&kernel.context_switcher, frame),
+            UserCall::Exit => kernel
+                .scheduler
+                .exit_current(&kernel.context_switcher, frame),
+        }
+    }
+
+    fn handle_unhandled<P: Platform>(
+        &self,
+        kernel: &Kernel<P>,
+        frame: &ExceptionFrame,
+        vector: Option<Vector>,
+    ) -> ! {
+        let mut console = kernel.console();
+        writeln!(console, "trains-rs: unhandled exception").ok();
+        writeln!(console, "  vector: {:?}", vector).ok();
+        writeln!(console, "  elr:    {:#018x}", frame.elr).ok();
+        writeln!(console, "  spsr:   {:#018x}", frame.spsr).ok();
+        writeln!(console, "  esr:    {:#018x}", frame.esr).ok();
+        writeln!(console, "  far:    {:#018x}", frame.far).ok();
+
+        loop {
+            // SAFETY: an unhandled exception is fatal until a policy exists.
+            unsafe { asm!("wfe", options(nomem, nostack, preserves_flags)) };
+        }
     }
 }
