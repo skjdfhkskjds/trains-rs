@@ -120,7 +120,54 @@ impl<P: Platform> Kernel<P> {
     /// Dispatches an exception delivered by the architecture entry stub.
     #[doc(hidden)]
     pub fn handle_exception(&self, frame: &mut ExceptionFrame) {
-        self.exception_handler.handle(self, frame);
+        match self.exception_handler.decode(frame) {
+            Ok(exception) => self.handle_decoded_exception(exception, frame),
+            Err(exception) => self.handle_unhandled_exception(exception, frame),
+        }
+    }
+
+    fn handle_decoded_exception(
+        &self,
+        exception: exceptions::DecodedException,
+        frame: &mut ExceptionFrame,
+    ) {
+        match exception {
+            exceptions::DecodedException::Interrupt => self.interrupt_handler.handle(self.platform),
+            exceptions::DecodedException::KernelCall(call) => self.handle_kernel_call(call, frame),
+            exceptions::DecodedException::UserCall(call) => self.handle_user_call(call, frame),
+        }
+    }
+
+    fn handle_kernel_call(&self, call: svc::KernelCall, frame: &mut ExceptionFrame) {
+        match call {
+            svc::KernelCall::ExceptionSelfTest => self.exception_handler.mark_self_test_handled(),
+            svc::KernelCall::ContextSelfTest => self.context_switcher.handle_self_test(frame),
+            svc::KernelCall::StartScheduler => {
+                self.scheduler.start_from(&self.context_switcher, frame)
+            }
+        }
+    }
+
+    fn handle_user_call(&self, call: svc::UserCall, frame: &mut ExceptionFrame) {
+        match call {
+            svc::UserCall::Yield => self.scheduler.yield_current(&self.context_switcher, frame),
+            svc::UserCall::Exit => self.scheduler.exit_current(&self.context_switcher, frame),
+        }
+    }
+
+    fn handle_unhandled_exception(
+        &self,
+        exception: exceptions::UnhandledException,
+        frame: &ExceptionFrame,
+    ) -> ! {
+        let mut console = self.console();
+        writeln!(console, "trains-rs: unhandled exception").ok();
+        writeln!(console, "  vector: {:?}", exception.vector()).ok();
+        writeln!(console, "  elr:    {:#018x}", frame.elr).ok();
+        writeln!(console, "  spsr:   {:#018x}", frame.spsr).ok();
+        writeln!(console, "  esr:    {:#018x}", frame.esr).ok();
+        writeln!(console, "  far:    {:#018x}", frame.far).ok();
+        self.park()
     }
 
     /// Enters the kernel's terminal idle state.

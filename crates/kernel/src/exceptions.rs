@@ -1,14 +1,10 @@
 //! AArch64 exception-vector setup, frame layout, and central dispatch.
 
 use core::arch::asm;
-use core::fmt::Write;
 use core::mem::{offset_of, size_of};
 use core::ptr::addr_of;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use trains_platform::Platform;
-
-use crate::Kernel;
 use crate::svc::{KernelCall, UserCall};
 
 const SVC64_EXCEPTION_CLASS: u64 = 0x15;
@@ -19,7 +15,7 @@ unsafe extern "C" {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u64)]
-enum Vector {
+pub(crate) enum Vector {
     CurrentSp0Sync = 0,
     CurrentSp0Irq = 1,
     CurrentSp0Fiq = 2,
@@ -108,6 +104,24 @@ pub(crate) struct ExceptionHandler {
     self_test_handled: AtomicBool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DecodedException {
+    Interrupt,
+    KernelCall(KernelCall),
+    UserCall(UserCall),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UnhandledException {
+    vector: Option<Vector>,
+}
+
+impl UnhandledException {
+    pub(crate) const fn vector(self) -> Option<Vector> {
+        self.vector
+    }
+}
+
 impl ExceptionHandler {
     pub(crate) const fn new() -> Self {
         Self {
@@ -147,117 +161,52 @@ impl ExceptionHandler {
         unsafe { asm!("msr daifset, #2", options(nomem, nostack, preserves_flags)) };
     }
 
-    pub(crate) fn handle<P: Platform>(&self, kernel: &Kernel<P>, frame: &mut ExceptionFrame) {
+    pub(crate) fn decode(
+        &self,
+        frame: &ExceptionFrame,
+    ) -> Result<DecodedException, UnhandledException> {
         let vector = Vector::try_from(frame.vector).ok();
 
         if vector.is_some_and(Vector::is_irq) {
-            kernel.interrupt_handler.handle(kernel.platform);
-            return;
+            return Ok(DecodedException::Interrupt);
         }
 
         let exception_class = frame.esr >> 26;
-        let svc_number = frame.esr as u16;
-        if exception_class == SVC64_EXCEPTION_CLASS
-            && self.handle_supervisor_call(kernel, frame, vector, svc_number)
-        {
-            return;
+        if exception_class != SVC64_EXCEPTION_CLASS {
+            return Err(UnhandledException { vector });
         }
 
-        self.handle_unhandled(kernel, frame, vector);
-    }
-
-    fn handle_supervisor_call<P: Platform>(
-        &self,
-        kernel: &Kernel<P>,
-        frame: &mut ExceptionFrame,
-        vector: Option<Vector>,
-        number: u16,
-    ) -> bool {
+        let number = frame.esr as u16;
         match vector {
-            Some(Vector::CurrentSpxSync) => self.decode_kernel_call(kernel, frame, number),
-            Some(Vector::LowerA64Sync) => self.decode_user_call(kernel, frame, number),
-            _ => false,
+            Some(Vector::CurrentSpxSync) => self.decode_kernel_call(number, vector),
+            Some(Vector::LowerA64Sync) => self.decode_user_call(number, vector),
+            _ => Err(UnhandledException { vector }),
         }
     }
 
-    fn decode_kernel_call<P: Platform>(
+    fn decode_kernel_call(
         &self,
-        kernel: &Kernel<P>,
-        frame: &mut ExceptionFrame,
         number: u16,
-    ) -> bool {
-        match KernelCall::try_from(number) {
-            Ok(call) => {
-                self.handle_kernel_call(kernel, frame, call);
-                true
-            }
-            Err(_) => false,
-        }
-    }
-
-    fn handle_kernel_call<P: Platform>(
-        &self,
-        kernel: &Kernel<P>,
-        frame: &mut ExceptionFrame,
-        call: KernelCall,
-    ) {
-        match call {
-            KernelCall::ExceptionSelfTest => self.self_test_handled.store(true, Ordering::Relaxed),
-            KernelCall::ContextSelfTest => kernel.context_switcher.handle_self_test(frame),
-            KernelCall::StartScheduler => {
-                kernel.scheduler.start_from(&kernel.context_switcher, frame)
-            }
-        }
-    }
-
-    fn decode_user_call<P: Platform>(
-        &self,
-        kernel: &Kernel<P>,
-        frame: &mut ExceptionFrame,
-        number: u16,
-    ) -> bool {
-        match UserCall::try_from(number) {
-            Ok(call) => {
-                self.handle_user_call(kernel, frame, call);
-                true
-            }
-            Err(_) => false,
-        }
-    }
-
-    fn handle_user_call<P: Platform>(
-        &self,
-        kernel: &Kernel<P>,
-        frame: &mut ExceptionFrame,
-        call: UserCall,
-    ) {
-        match call {
-            UserCall::Yield => kernel
-                .scheduler
-                .yield_current(&kernel.context_switcher, frame),
-            UserCall::Exit => kernel
-                .scheduler
-                .exit_current(&kernel.context_switcher, frame),
-        }
-    }
-
-    fn handle_unhandled<P: Platform>(
-        &self,
-        kernel: &Kernel<P>,
-        frame: &ExceptionFrame,
         vector: Option<Vector>,
-    ) -> ! {
-        let mut console = kernel.console();
-        writeln!(console, "trains-rs: unhandled exception").ok();
-        writeln!(console, "  vector: {:?}", vector).ok();
-        writeln!(console, "  elr:    {:#018x}", frame.elr).ok();
-        writeln!(console, "  spsr:   {:#018x}", frame.spsr).ok();
-        writeln!(console, "  esr:    {:#018x}", frame.esr).ok();
-        writeln!(console, "  far:    {:#018x}", frame.far).ok();
-
-        loop {
-            // SAFETY: an unhandled exception is fatal until a policy exists.
-            unsafe { asm!("wfe", options(nomem, nostack, preserves_flags)) };
+    ) -> Result<DecodedException, UnhandledException> {
+        match KernelCall::try_from(number) {
+            Ok(call) => Ok(DecodedException::KernelCall(call)),
+            Err(_) => Err(UnhandledException { vector }),
         }
+    }
+
+    fn decode_user_call(
+        &self,
+        number: u16,
+        vector: Option<Vector>,
+    ) -> Result<DecodedException, UnhandledException> {
+        match UserCall::try_from(number) {
+            Ok(call) => Ok(DecodedException::UserCall(call)),
+            Err(_) => Err(UnhandledException { vector }),
+        }
+    }
+
+    pub(crate) fn mark_self_test_handled(&self) {
+        self.self_test_handled.store(true, Ordering::Relaxed);
     }
 }
