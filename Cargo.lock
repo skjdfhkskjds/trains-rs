@@ -19,6 +19,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "trains-logger"
+version = "0.1.0"
+dependencies = [
+ "trains-platform",
+]
+
+[[package]]
 name = "trains-platform"
 version = "0.1.0"
 dependencies = [

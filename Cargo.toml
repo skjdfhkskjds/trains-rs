@@ -2,6 +2,7 @@
 members = [
     "crates/application",
     "crates/kernel",
+    "crates/logger",
     "crates/platform",
     "crates/primitives",
 ]
