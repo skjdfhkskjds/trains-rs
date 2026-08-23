@@ -8,6 +8,7 @@ The workspace contains:
 
 - `crates/application`: Interactive entrypoint and application commands.
 - `crates/kernel`: AArch64 boot, exception, task, scheduler, and command runtime.
+- `crates/logger`: Allocation-free, color-coded logging over the platform console.
 - `crates/platform`: `no_std` BCM2711 GPIO, PL011, Arm generic timer, and
   GIC-400 support.
 - `xtask`: host-side image builder used by `cargo image`.
@@ -28,24 +29,27 @@ segments and entry point at `0x80000`.
 Expected serial output:
 
 ```text
-trains-rs: Raspberry Pi 4 / BCM2711 platform ready
-trains-rs: exception handling ready
-trains-rs: context switching ready
-trains-rs: task primitive ready
-trains-rs: cooperative scheduling ready
-trains-rs: Arm generic timer ready
-trains-rs: interrupt handling ready
+[INFO] trains-rs: Raspberry Pi 4 / BCM2711 platform ready
+[INFO] trains-rs: exception handling ready
+[INFO] trains-rs: context switching ready
+[INFO] trains-rs: task primitive ready
+[INFO] trains-rs: cooperative scheduling ready
+[INFO] trains-rs: Arm generic timer ready
+[INFO] trains-rs: interrupt handling ready
 trains-rs> demo
-trains-rs: cooperative yield example
-task 0 (priority 0): before yield
-task 0 (priority 0): after yield
-task 1 (priority 1): before yield
-task 1 (priority 1): after yield
-task 2 (priority 2): before yield
-task 2 (priority 2): after yield
-trains-rs: cooperative yield example complete
+[INFO] trains-rs: cooperative yield example
+[DEBUG] task 0 (priority 0): before yield
+[DEBUG] task 0 (priority 0): after yield
+[DEBUG] task 1 (priority 1): before yield
+[DEBUG] task 1 (priority 1): after yield
+[DEBUG] task 2 (priority 2): before yield
+[DEBUG] task 2 (priority 2): after yield
+[INFO] trains-rs: cooperative yield example complete
 trains-rs>
 ```
+
+The serial terminal renders info headers in light blue, warnings in yellow,
+errors in red, and debug headers in magenta.
 
 Enter `demo` at the prompt to run the cooperative scheduling example again.
 
