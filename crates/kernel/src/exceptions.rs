@@ -6,8 +6,9 @@ use core::mem::{offset_of, size_of};
 use core::ptr::addr_of;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use trains_platform::{Platform as _, RASPI4};
+use trains_platform::Platform;
 
+use crate::Kernel;
 use crate::svc::{KernelCall, UserCall};
 
 const SVC64_EXCEPTION_CLASS: u64 = 0x15;
@@ -72,7 +73,7 @@ impl Vector {
 }
 
 #[repr(C)]
-pub(crate) struct ExceptionFrame {
+pub struct ExceptionFrame {
     pub(crate) registers: [u64; 31],
     pub(crate) stack_pointer: u64,
     pub(crate) elr: u64,
@@ -136,14 +137,13 @@ pub(crate) fn disable_irqs() {
     unsafe { asm!("msr daifset, #2", options(nomem, nostack, preserves_flags)) };
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn exception_handler(frame: &mut ExceptionFrame) {
+pub(crate) fn handle<P: Platform>(kernel: &Kernel<P>, frame: &mut ExceptionFrame) {
     let vector = Vector::try_from(frame.vector).ok();
     let exception_class = frame.esr >> 26;
     let svc_number = frame.esr as u16;
 
     if vector.is_some_and(Vector::is_irq) {
-        crate::interrupts::handle();
+        crate::interrupts::handle(kernel.platform);
         return;
     }
 
@@ -159,18 +159,18 @@ extern "C" fn exception_handler(frame: &mut ExceptionFrame) {
                     return;
                 }
                 Ok(KernelCall::StartScheduler) => {
-                    crate::scheduler::start_from(frame);
+                    kernel.scheduler.start_from(frame);
                     return;
                 }
                 Err(_) => {}
             },
             Some(Vector::LowerA64Sync) => match UserCall::try_from(svc_number) {
                 Ok(UserCall::Yield) => {
-                    crate::scheduler::yield_current(frame);
+                    kernel.scheduler.yield_current(frame);
                     return;
                 }
                 Ok(UserCall::Exit) => {
-                    crate::scheduler::exit_current(frame);
+                    kernel.scheduler.exit_current(frame);
                     return;
                 }
                 Err(_) => {}
@@ -179,7 +179,7 @@ extern "C" fn exception_handler(frame: &mut ExceptionFrame) {
         }
     }
 
-    let mut console = RASPI4.console();
+    let mut console = kernel.console();
     writeln!(console, "trains-rs: unhandled exception").ok();
     writeln!(console, "  vector: {:?}", vector).ok();
     writeln!(console, "  elr:    {:#018x}", frame.elr).ok();

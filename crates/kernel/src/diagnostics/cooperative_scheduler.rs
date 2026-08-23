@@ -66,13 +66,17 @@ pub(crate) fn run() -> bool {
     }
 
     let priority = Priority::new(1);
-    if crate::scheduler::create(task_a, priority).is_err()
-        || crate::scheduler::create(task_b, priority).is_err()
+    if crate::scheduler::SCHEDULER
+        .create(task_a, priority)
+        .is_err()
+        || crate::scheduler::SCHEDULER
+            .create(task_b, priority)
+            .is_err()
     {
         return false;
     }
 
-    let Ok(outcome) = crate::scheduler::run() else {
+    let Ok(outcome) = crate::scheduler::SCHEDULER.run() else {
         return false;
     };
     let expected = [1, 2, 1, 2, 1, 2];

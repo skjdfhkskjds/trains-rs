@@ -73,7 +73,7 @@ enum SchedulerPhase {
     Running,
 }
 
-struct Scheduler {
+struct SchedulerState {
     tasks: [TaskSlot; MAX_TASKS],
     ready: PriorityQueue<SlotId, Priority, MAX_TASKS>,
     current: Option<SlotId>,
@@ -82,7 +82,7 @@ struct Scheduler {
     exited_tasks: usize,
 }
 
-impl Scheduler {
+impl SchedulerState {
     const fn new() -> Self {
         Self {
             tasks: [const { TaskSlot::vacant() }; MAX_TASKS],
@@ -189,18 +189,55 @@ impl Scheduler {
     }
 }
 
-struct SchedulerCell(UnsafeCell<Scheduler>);
+/// Synchronized access to the single-core scheduler state.
+pub(crate) struct Scheduler {
+    state: UnsafeCell<SchedulerState>,
+}
 
 // SAFETY: only the primary core runs kernel code, and exception entry masks
-// IRQs before scheduler mutation. `with_scheduler` bounds every mutable borrow.
-unsafe impl Sync for SchedulerCell {}
+// IRQs before scheduler mutation. `with_state` bounds every mutable borrow.
+unsafe impl Sync for Scheduler {}
 
-static SCHEDULER: SchedulerCell = SchedulerCell(UnsafeCell::new(Scheduler::new()));
+pub(crate) static SCHEDULER: Scheduler = Scheduler {
+    state: UnsafeCell::new(SchedulerState::new()),
+};
 
-fn with_scheduler<R>(operation: impl FnOnce(&mut Scheduler) -> R) -> R {
-    // SAFETY: `SchedulerCell`'s single-core, IRQ-masked access invariant ensures
-    // each call has exclusive access for its duration.
-    operation(unsafe { &mut *SCHEDULER.0.get() })
+impl Scheduler {
+    fn with_state<R>(&self, operation: impl FnOnce(&mut SchedulerState) -> R) -> R {
+        // SAFETY: the scheduler's single-core, IRQ-masked access invariant
+        // ensures each call has exclusive access for its duration.
+        operation(unsafe { &mut *self.state.get() })
+    }
+
+    pub(crate) fn create(
+        &self,
+        entry: TaskEntry,
+        priority: Priority,
+    ) -> Result<TaskId, CreateError> {
+        self.with_state(|scheduler| scheduler.create(entry, priority))
+    }
+
+    pub(crate) fn run(&self) -> Result<RunOutcome, RunError> {
+        self.with_state(SchedulerState::prepare_run)?;
+
+        // SAFETY: the handler saves this EL1 context, dispatches the first
+        // ready EL0 task, and restores it after the final task exits.
+        unsafe { asm!("svc #{svc}", svc = const KernelCall::StartScheduler as u16) };
+
+        Ok(self.with_state(SchedulerState::complete_run))
+    }
+
+    pub(crate) fn start_from(&self, frame: &mut ExceptionFrame) {
+        self.with_state(|scheduler| scheduler.start(frame));
+    }
+
+    pub(crate) fn yield_current(&self, frame: &mut ExceptionFrame) {
+        self.with_state(|scheduler| scheduler.yield_current(frame));
+    }
+
+    pub(crate) fn exit_current(&self, frame: &mut ExceptionFrame) {
+        self.with_state(|scheduler| scheduler.exit_current(frame));
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -225,30 +262,4 @@ impl RunOutcome {
     pub const fn exited_tasks(self) -> usize {
         self.exited_tasks
     }
-}
-
-pub(crate) fn create(entry: TaskEntry, priority: Priority) -> Result<TaskId, CreateError> {
-    with_scheduler(|scheduler| scheduler.create(entry, priority))
-}
-
-pub(crate) fn run() -> Result<RunOutcome, RunError> {
-    with_scheduler(Scheduler::prepare_run)?;
-
-    // SAFETY: the handler saves this EL1 context, dispatches the first ready
-    // EL0 task, and restores this context after the final task exits.
-    unsafe { asm!("svc #{svc}", svc = const KernelCall::StartScheduler as u16) };
-
-    Ok(with_scheduler(Scheduler::complete_run))
-}
-
-pub(crate) fn start_from(frame: &mut ExceptionFrame) {
-    with_scheduler(|scheduler| scheduler.start(frame));
-}
-
-pub(crate) fn yield_current(frame: &mut ExceptionFrame) {
-    with_scheduler(|scheduler| scheduler.yield_current(frame));
-}
-
-pub(crate) fn exit_current(frame: &mut ExceptionFrame) {
-    with_scheduler(|scheduler| scheduler.exit_current(frame));
 }

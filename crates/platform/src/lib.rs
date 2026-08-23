@@ -44,7 +44,7 @@ pub trait Timer: Copy + delay::DelayNs {
 }
 
 pub trait InterruptController: Copy {
-    type Interrupt: Copy;
+    type Interrupt: Copy + Eq;
     type Claim: InterruptClaim<Interrupt = Self::Interrupt>;
 
     fn enable(&self, interrupt: Self::Interrupt);
@@ -81,4 +81,5 @@ pub trait Platform: Copy {
     fn gpio(&self) -> Self::Gpio;
     fn timer(&self) -> Self::Timer;
     fn interrupt_controller(&self) -> Self::InterruptController;
+    fn timer_interrupt(&self) -> <Self::InterruptController as InterruptController>::Interrupt;
 }

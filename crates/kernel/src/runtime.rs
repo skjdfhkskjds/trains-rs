@@ -1,10 +1,14 @@
 //! Interactive application command registration and dispatch.
 
-use trains_platform::Console;
+use core::fmt::Write as _;
+
+use trains_platform::{Console as _, Platform};
+
+use crate::{Kernel, KernelConsole};
 
 const INPUT_CAPACITY: usize = 128;
 
-pub type CommandHandler = fn(arguments: &str) -> CommandResult;
+pub type CommandHandler<P> = fn(kernel: &Kernel<P>, arguments: &str) -> CommandResult;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CommandResult {
@@ -13,13 +17,13 @@ pub enum CommandResult {
 }
 
 #[derive(Clone, Copy)]
-pub struct Command {
+pub struct Command<P: Platform> {
     name: &'static str,
-    handler: CommandHandler,
+    handler: CommandHandler<P>,
 }
 
-impl Command {
-    pub const fn new(name: &'static str, handler: CommandHandler) -> Self {
+impl<P: Platform> Command<P> {
+    pub const fn new(name: &'static str, handler: CommandHandler<P>) -> Self {
         Self { name, handler }
     }
 }
@@ -31,23 +35,22 @@ pub enum RegisterError {
     InvalidName,
 }
 
-pub struct Runtime<C, const COMMAND_CAPACITY: usize> {
-    console: C,
-    commands: [Option<Command>; COMMAND_CAPACITY],
+pub struct Runtime<'kernel, P: Platform, const COMMAND_CAPACITY: usize> {
+    kernel: &'kernel Kernel<P>,
+    console: KernelConsole<P>,
+    commands: [Option<Command<P>>; COMMAND_CAPACITY],
 }
 
-impl<C, const COMMAND_CAPACITY: usize> Runtime<C, COMMAND_CAPACITY>
-where
-    C: Console,
-{
-    pub const fn new(console: C) -> Self {
+impl<'kernel, P: Platform, const COMMAND_CAPACITY: usize> Runtime<'kernel, P, COMMAND_CAPACITY> {
+    pub fn new(kernel: &'kernel Kernel<P>) -> Self {
         Self {
-            console,
+            console: kernel.console(),
+            kernel,
             commands: [None; COMMAND_CAPACITY],
         }
     }
 
-    pub fn register(&mut self, command: Command) -> Result<(), RegisterError> {
+    pub fn register(&mut self, command: Command<P>) -> Result<(), RegisterError> {
         if command.name.is_empty() || command.name.bytes().any(|byte| byte.is_ascii_whitespace()) {
             return Err(RegisterError::InvalidName);
         }
@@ -74,7 +77,7 @@ where
         let mut discard_line_feed = false;
 
         loop {
-            write!(self.console, "trains-rs> ").ok();
+            write!(self.console, "> ").ok();
             let length = self.read_line(&mut input, &mut discard_line_feed);
             let line = core::str::from_utf8(&input[..length])
                 .expect("the console accepts ASCII input only");
@@ -142,12 +145,13 @@ where
             .iter()
             .flatten()
             .find(|command| command.name == name)
+            .copied()
         else {
             writeln!(self.console, "unknown command: {name}").ok();
             return;
         };
 
-        if (command.handler)(arguments) == CommandResult::Failure {
+        if (command.handler)(self.kernel, arguments) == CommandResult::Failure {
             writeln!(self.console, "command failed: {name}").ok();
         }
     }

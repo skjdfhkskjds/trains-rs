@@ -97,4 +97,11 @@ impl Platform for Raspi4 {
     fn interrupt_controller(&self) -> Self::InterruptController {
         INTERRUPTS
     }
+
+    #[inline]
+    fn timer_interrupt(
+        &self,
+    ) -> <Self::InterruptController as crate::InterruptController>::Interrupt {
+        Interrupt::PhysicalTimer
+    }
 }

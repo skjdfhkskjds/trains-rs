@@ -1,3 +1,5 @@
 //! Demonstration workloads exposed as application commands.
 
-pub(crate) mod cooperative_yield;
+mod cooperative_yield;
+
+pub(crate) use cooperative_yield::CooperativeYield;

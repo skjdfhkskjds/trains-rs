@@ -3,20 +3,17 @@
 use core::arch::asm;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use trains_platform::{
-    InterruptClaim as _, InterruptController as _, Platform as _, RASPI4, Timer as _,
-    raspi4::Interrupt,
-};
+use trains_platform::{InterruptClaim as _, InterruptController as _, Platform, Timer as _};
 use trains_primitives::time::Duration;
 
 static TIMER_FIRED: AtomicBool = AtomicBool::new(false);
 
-pub(crate) fn handle() {
-    let controller = RASPI4.interrupt_controller();
+pub(crate) fn handle<P: Platform>(platform: P) {
+    let controller = platform.interrupt_controller();
 
     while let Some(claim) = controller.claim() {
-        if claim.interrupt() == Some(Interrupt::PhysicalTimer) {
-            RASPI4.timer().cancel_deadline();
+        if claim.interrupt() == Some(platform.timer_interrupt()) {
+            platform.timer().cancel_deadline();
             TIMER_FIRED.store(true, Ordering::Release);
         }
 
@@ -24,13 +21,14 @@ pub(crate) fn handle() {
     }
 }
 
-pub(crate) fn self_test() -> bool {
-    let controller = RASPI4.interrupt_controller();
-    let timer = RASPI4.timer();
+pub(crate) fn self_test<P: Platform>(platform: P) -> bool {
+    let controller = platform.interrupt_controller();
+    let timer = platform.timer();
+    let timer_interrupt = platform.timer_interrupt();
 
     TIMER_FIRED.store(false, Ordering::Relaxed);
     timer.cancel_deadline();
-    controller.enable(Interrupt::PhysicalTimer);
+    controller.enable(timer_interrupt);
     timer.schedule_after(Duration::from_millis(1));
     crate::exceptions::enable_irqs();
 
@@ -41,7 +39,7 @@ pub(crate) fn self_test() -> bool {
     }
 
     crate::exceptions::disable_irqs();
-    controller.disable(Interrupt::PhysicalTimer);
+    controller.disable(timer_interrupt);
     timer.cancel_deadline();
     true
 }
