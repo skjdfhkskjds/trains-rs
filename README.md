@@ -36,7 +36,7 @@ Expected serial output:
 [INFO] trains-rs: cooperative scheduling ready
 [INFO] trains-rs: Arm generic timer ready
 [INFO] trains-rs: interrupt handling ready
-trains-rs> demo
+> demo
 [INFO] trains-rs: cooperative yield example
 [DEBUG] task 0 (priority 0): before yield
 [DEBUG] task 0 (priority 0): after yield
@@ -45,7 +45,7 @@ trains-rs> demo
 [DEBUG] task 2 (priority 2): before yield
 [DEBUG] task 2 (priority 2): after yield
 [INFO] trains-rs: cooperative yield example complete
-trains-rs>
+>
 ```
 
 The serial terminal renders info headers in light blue, warnings in yellow,
