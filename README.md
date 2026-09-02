@@ -58,6 +58,18 @@ errors in red, and debug headers in magenta.
 
 Enter `demo` at the prompt to run the cooperative scheduling example again.
 
+The K1 lifecycle diagnostic is available as `k1`. It dynamically creates the
+assignment's mixed-priority children and verifies task identity, parent
+identity, stable FIFO yielding, exit cleanup, slot reuse, and return to the
+finite EL1 command runtime. It is safe to run repeatedly in one boot.
+
+The scheduler's pure-state K1 tests run on an AArch64 host target (the default
+workspace target is the bare-metal image and has no Rust test harness):
+
+```sh
+cargo test -p trains-kernel --target aarch64-apple-darwin
+```
+
 Exit QEMU with Ctrl-C.
 
 QEMU's Pi 4 model does not implement every PiKVM device. In particular, PCIe,
