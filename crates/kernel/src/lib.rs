@@ -1,13 +1,17 @@
 #![no_std]
 
-use core::arch::{asm, global_asm};
+use core::arch::asm;
+#[cfg(target_os = "none")]
+use core::arch::global_asm;
 use core::fmt::Write;
 
 use trains_logger::Logger;
 use trains_platform::{Platform, delay::DelayNs as _};
 pub use trains_primitives::task::{Priority, TaskId};
 
+#[cfg(target_os = "none")]
 global_asm!(include_str!("asm/boot.S"));
+#[cfg(target_os = "none")]
 global_asm!(include_str!("asm/exceptions.S"));
 
 mod context;
@@ -19,6 +23,10 @@ mod scheduler;
 mod svc;
 mod task;
 
+/// Entry ABI for an EL0 task.
+///
+/// The never return type makes K1's lifecycle policy explicit: a terminating
+/// task must call [`CurrentTask::exit`] rather than return from its entrypoint.
 pub type TaskEntry = extern "C" fn(TaskId) -> !;
 pub type KernelConsole<P> = <P as Platform>::Console;
 pub type KernelLogger<P> = Logger<KernelConsole<P>>;
@@ -163,6 +171,15 @@ impl<P: Platform> Kernel<P> {
         match call {
             svc::UserCall::Yield => self.scheduler.yield_current(&self.context_switcher, frame),
             svc::UserCall::Exit => self.scheduler.exit_current(&self.context_switcher, frame),
+            svc::UserCall::Create => {
+                let request = svc::CreateRequest::decode(frame.registers[0], frame.registers[1]);
+                self.scheduler
+                    .create_current(&self.context_switcher, frame, request);
+            }
+            svc::UserCall::MyTid => self.scheduler.current_id(&self.context_switcher, frame),
+            svc::UserCall::MyParentTid => self
+                .scheduler
+                .current_parent_id(&self.context_switcher, frame),
         }
     }
 
@@ -196,6 +213,61 @@ impl<P: Platform> Kernel<P> {
 pub struct CurrentTask;
 
 impl CurrentTask {
+    /// Creates a ready child whose parent is the calling task.
+    ///
+    /// Every `u32` priority is valid; lower values run first. The call is a
+    /// scheduling point, so an equal- or higher-priority child can run before
+    /// this function returns.
+    pub fn create(priority: Priority, entry: TaskEntry) -> Result<TaskId, CreateError> {
+        let result: u64;
+        // SAFETY: `entry` has the kernel's task-entry ABI. The exception stub
+        // preserves the suspended task context, and x0 is the defined result.
+        // This intentionally has a memory clobber because another task may run.
+        unsafe {
+            asm!(
+                "svc #{svc}",
+                svc = const svc::UserCall::Create as u16,
+                inout("x0") u64::from(priority.get()) => result,
+                in("x1") entry as usize,
+            )
+        };
+        svc::decode_create_result(result)
+    }
+
+    /// Returns the identity assigned to the calling task.
+    ///
+    /// Identity queries are scheduling points.
+    pub fn id() -> TaskId {
+        let result: u64;
+        // SAFETY: the kernel writes the caller's task ID to the saved x0 and
+        // eventually restores this context.
+        unsafe {
+            asm!(
+                "svc #{svc}",
+                svc = const svc::UserCall::MyTid as u16,
+                lateout("x0") result,
+            )
+        };
+        TaskId::new(result as u32)
+    }
+
+    /// Returns the creator of this task, or `None` for a bootstrap task.
+    ///
+    /// Parent identity queries are scheduling points.
+    pub fn parent_id() -> Option<TaskId> {
+        let result: u64;
+        // SAFETY: the kernel writes the encoded optional parent to the saved
+        // x0 and eventually restores this context.
+        unsafe {
+            asm!(
+                "svc #{svc}",
+                svc = const svc::UserCall::MyParentTid as u16,
+                lateout("x0") result,
+            )
+        };
+        svc::decode_parent(result)
+    }
+
     /// Places the current task at the back of its priority level.
     pub fn yield_now() {
         // SAFETY: the kernel installs a handler for this SVC before tasks run.

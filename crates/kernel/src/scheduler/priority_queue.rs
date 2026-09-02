@@ -26,6 +26,11 @@ impl<T: Copy, P: Copy + Ord, const CAPACITY: usize> PriorityQueue<T, P, CAPACITY
         self.len == 0
     }
 
+    #[cfg(test)]
+    pub(super) const fn len(&self) -> usize {
+        self.len
+    }
+
     /// Inserts after existing entries of the same priority, preserving FIFO
     /// scheduling among equally prioritized tasks.
     pub(super) fn push(&mut self, value: T, priority: P) -> Result<(), QueueFull> {

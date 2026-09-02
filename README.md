@@ -13,6 +13,11 @@ The workspace contains:
   GIC-400 support.
 - `xtask`: host-side image builder used by `cargo image`.
 
+The scoped implementation plan for the original K1-K3 kernel assignments is
+in [`docs/kernel-k1-k3.md`](docs/kernel-k1-k3.md). It covers task lifecycle,
+message passing, events, timer scheduling, and the name/clock/idle core tasks;
+train application work is intentionally excluded.
+
 ## Build and run in QEMU
 
 Install QEMU with `qemu-system-aarch64` and run:
@@ -52,6 +57,18 @@ The serial terminal renders info headers in light blue, warnings in yellow,
 errors in red, and debug headers in magenta.
 
 Enter `demo` at the prompt to run the cooperative scheduling example again.
+
+The K1 lifecycle diagnostic is available as `k1`. It dynamically creates the
+assignment's mixed-priority children and verifies task identity, parent
+identity, stable FIFO yielding, exit cleanup, slot reuse, and return to the
+finite EL1 command runtime. It is safe to run repeatedly in one boot.
+
+The scheduler's pure-state K1 tests run on an AArch64 host target (the default
+workspace target is the bare-metal image and has no Rust test harness):
+
+```sh
+cargo test -p trains-kernel --target aarch64-apple-darwin
+```
 
 Exit QEMU with Ctrl-C.
 
