@@ -7,19 +7,23 @@ use trains_kernel::{ExceptionFrame, Kernel, runtime::Runtime};
 use trains_platform::{RASPI4, Raspi4};
 
 mod demo;
+mod services;
 
 pub(crate) static KERNEL: Kernel<Raspi4> = Kernel::new(RASPI4);
 
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_main(_dtb: usize) -> ! {
     KERNEL.initialize();
-    let mut runtime = Runtime::<Raspi4, 2>::new(&KERNEL);
+    let mut runtime = Runtime::<Raspi4, 3>::new(&KERNEL);
     runtime
         .register(demo::CooperativeYield::command())
         .expect("the demo command registry is valid");
     runtime
         .register(demo::K1::command())
         .expect("the K1 command registry is valid");
+    runtime
+        .register(demo::K2::command())
+        .expect("the K2 command registry is valid");
     runtime.run()
 }
 
