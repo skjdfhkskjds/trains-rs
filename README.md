@@ -63,6 +63,12 @@ assignment's mixed-priority children and verifies task identity, parent
 identity, stable FIFO yielding, exit cleanup, slot reuse, and return to the
 finite EL1 command runtime. It is safe to run repeatedly in one boot.
 
+The K2 diagnostic is available as `k2`. It exercises both synchronous IPC
+rendezvous orders, FIFO senders, byte truncation and logical lengths, delayed
+replies, typed failures, sender-queue saturation, repeated round trips, the
+fixed-capacity name server, and a complete two-client RPS round. Its service
+handles come from bootstrap task IDs rather than hard-coded slot numbers.
+
 The scheduler's pure-state K1 tests run on an AArch64 host target (the default
 workspace target is the bare-metal image and has no Rust test harness):
 

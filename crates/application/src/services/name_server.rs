@@ -20,8 +20,6 @@ const NAME_CAPACITY: usize = 8;
 pub(crate) const MAX_NAME_LENGTH: usize = 31;
 const REQUEST_CAPACITY: usize = MAX_NAME_LENGTH + 1;
 const WHO_IS_REPLY_LENGTH: usize = 1 + size_of::<u32>();
-const RUN_FOREVER: usize = usize::MAX;
-
 static BOUNDED_REQUEST_LIMIT: AtomicUsize = AtomicUsize::new(0);
 
 /// A bootstrapped reference to the name-server task.
@@ -110,18 +108,21 @@ impl NameServer {
     }
 
     extern "C" fn task(_id: TaskId) -> ! {
-        Self::serve(RUN_FOREVER)
+        Self::serve(None)
     }
 
     extern "C" fn bounded_task(_id: TaskId) -> ! {
-        Self::serve(BOUNDED_REQUEST_LIMIT.load(Ordering::Acquire))
+        Self::serve(Some(BOUNDED_REQUEST_LIMIT.load(Ordering::Acquire)))
     }
 
-    fn serve(request_limit: usize) -> ! {
+    fn serve(request_limit: Option<usize>) -> ! {
         let mut registry = Registry::new();
         let mut processed = 0;
 
-        while processed < request_limit {
+        loop {
+            if request_limit.is_some_and(|limit| processed == limit) {
+                CurrentTask::exit();
+            }
             let mut request = [0; REQUEST_CAPACITY];
             let (sender, logical_length) = match CurrentTask::receive(&mut request) {
                 Ok(received) => received,
@@ -133,8 +134,6 @@ impl NameServer {
             }
             processed += 1;
         }
-
-        CurrentTask::exit()
     }
 }
 

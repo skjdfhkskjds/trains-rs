@@ -389,7 +389,6 @@ static NAME_SERVER_ID: AtomicU32 = AtomicU32::new(UNSET_ID);
 static RPS_SERVER_ID: AtomicU32 = AtomicU32::new(UNSET_ID);
 static RPS_CLIENT_A_ID: AtomicU32 = AtomicU32::new(UNSET_ID);
 static RPS_CLIENT_B_ID: AtomicU32 = AtomicU32::new(UNSET_ID);
-static NAME_FIRST_DONE: AtomicBool = AtomicBool::new(false);
 static NAME_CHECKS_DONE: AtomicBool = AtomicBool::new(false);
 static RPS_REGISTERED: AtomicBool = AtomicBool::new(false);
 static RPS_CLIENT_A_PHASE: AtomicUsize = AtomicUsize::new(0);
@@ -401,7 +400,6 @@ fn reset_services() {
     RPS_SERVER_ID.store(UNSET_ID, Ordering::SeqCst);
     RPS_CLIENT_A_ID.store(UNSET_ID, Ordering::SeqCst);
     RPS_CLIENT_B_ID.store(UNSET_ID, Ordering::SeqCst);
-    NAME_FIRST_DONE.store(false, Ordering::SeqCst);
     NAME_CHECKS_DONE.store(false, Ordering::SeqCst);
     RPS_REGISTERED.store(false, Ordering::SeqCst);
     RPS_CLIENT_A_PHASE.store(0, Ordering::SeqCst);
@@ -417,7 +415,6 @@ extern "C" fn name_first(entry_id: TaskId) -> ! {
     check(
         name_server_handle().register_as(b"replace-me") == Ok(()) && CurrentTask::id() == entry_id,
     );
-    NAME_FIRST_DONE.store(true, Ordering::SeqCst);
     CurrentTask::exit()
 }
 
