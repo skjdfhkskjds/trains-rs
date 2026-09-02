@@ -13,6 +13,11 @@ The workspace contains:
   GIC-400 support.
 - `xtask`: host-side image builder used by `cargo image`.
 
+The scoped implementation plan for the original K1-K3 kernel assignments is
+in [`docs/kernel-k1-k3.md`](docs/kernel-k1-k3.md). It covers task lifecycle,
+message passing, events, timer scheduling, and the name/clock/idle core tasks;
+train application work is intentionally excluded.
+
 ## Build and run in QEMU
 
 Install QEMU with `qemu-system-aarch64` and run:
