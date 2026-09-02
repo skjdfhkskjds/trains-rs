@@ -1,14 +1,11 @@
 [package]
-name = "trains-kernel"
+name = "trains-logger"
 version.workspace = true
 edition.workspace = true
 publish = false
 
 [dependencies]
-trains-logger = { path = "../logger" }
 trains-platform = { path = "../platform" }
-trains-primitives = { path = "../primitives" }
 
 [lib]
-test = false
-bench = false
+doctest = false

@@ -14,8 +14,16 @@ dependencies = [
 name = "trains-kernel"
 version = "0.1.0"
 dependencies = [
+ "trains-logger",
  "trains-platform",
  "trains-primitives",
+]
+
+[[package]]
+name = "trains-logger"
+version = "0.1.0"
+dependencies = [
+ "trains-platform",
 ]
 
 [[package]]

@@ -3,6 +3,7 @@
 use core::arch::{asm, global_asm};
 use core::fmt::Write;
 
+use trains_logger::Logger;
 use trains_platform::{Platform, delay::DelayNs as _};
 pub use trains_primitives::task::{Priority, TaskId};
 
@@ -20,6 +21,7 @@ mod task;
 
 pub type TaskEntry = extern "C" fn(TaskId) -> !;
 pub type KernelConsole<P> = <P as Platform>::Console;
+pub type KernelLogger<P> = Logger<KernelConsole<P>>;
 
 pub use exceptions::ExceptionFrame;
 pub use scheduler::{CreateError, RunError, RunOutcome};
@@ -53,58 +55,67 @@ impl<P: Platform> Kernel<P> {
         self.platform.init();
         self.exception_handler.init();
 
-        let mut console = self.console();
-        writeln!(
-            console,
-            "trains-rs: Raspberry Pi 4 / BCM2711 platform ready"
-        )
-        .ok();
+        let mut logger = self.logger();
+        logger
+            .info("trains-rs: Raspberry Pi 4 / BCM2711 platform ready")
+            .ok();
 
         if self.exception_handler.self_test() {
-            writeln!(console, "trains-rs: exception handling ready").ok();
+            logger.info("trains-rs: exception handling ready").ok();
         } else {
-            writeln!(console, "trains-rs: exception handling self-test failed").ok();
+            logger
+                .error("trains-rs: exception handling self-test failed")
+                .ok();
         }
 
         if self.context_switcher.self_test() {
-            writeln!(console, "trains-rs: context switching ready").ok();
+            logger.info("trains-rs: context switching ready").ok();
         } else {
-            writeln!(console, "trains-rs: context switching self-test failed").ok();
+            logger
+                .error("trains-rs: context switching self-test failed")
+                .ok();
         }
 
         if task::Task::self_test() {
-            writeln!(console, "trains-rs: task primitive ready").ok();
+            logger.info("trains-rs: task primitive ready").ok();
         } else {
-            writeln!(console, "trains-rs: task primitive self-test failed").ok();
+            logger
+                .error("trains-rs: task primitive self-test failed")
+                .ok();
         }
 
         if self.scheduler_diagnostic.run(self.scheduler) {
-            writeln!(console, "trains-rs: cooperative scheduling ready").ok();
+            logger.info("trains-rs: cooperative scheduling ready").ok();
         } else {
-            writeln!(
-                console,
-                "trains-rs: cooperative scheduling self-test failed"
-            )
-            .ok();
+            logger
+                .error("trains-rs: cooperative scheduling self-test failed")
+                .ok();
         }
 
         let mut timer = self.platform.timer();
         timer.delay_us(1_000);
-        writeln!(console, "trains-rs: Arm generic timer ready").ok();
+        logger.info("trains-rs: Arm generic timer ready").ok();
 
         if self
             .interrupt_handler
             .self_test(self.platform, &self.exception_handler)
         {
-            writeln!(console, "trains-rs: interrupt handling ready").ok();
+            logger.info("trains-rs: interrupt handling ready").ok();
         } else {
-            writeln!(console, "trains-rs: interrupt handling self-test failed").ok();
+            logger
+                .error("trains-rs: interrupt handling self-test failed")
+                .ok();
         }
     }
 
     /// Returns a handle to the kernel console.
     pub fn console(&self) -> KernelConsole<P> {
         self.platform.console()
+    }
+
+    /// Returns a logger backed by the kernel console.
+    pub fn logger(&self) -> KernelLogger<P> {
+        Logger::new(self.console())
     }
 
     /// Adds an application task to the scheduler's ready queue.
@@ -160,8 +171,10 @@ impl<P: Platform> Kernel<P> {
         exception: exceptions::UnhandledException,
         frame: &ExceptionFrame,
     ) -> ! {
+        let mut logger = self.logger();
+        logger.error("trains-rs: unhandled exception").ok();
+
         let mut console = self.console();
-        writeln!(console, "trains-rs: unhandled exception").ok();
         writeln!(console, "  vector: {:?}", exception.vector()).ok();
         writeln!(console, "  elr:    {:#018x}", frame.elr).ok();
         writeln!(console, "  spsr:   {:#018x}", frame.spsr).ok();

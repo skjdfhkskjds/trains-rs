@@ -147,12 +147,18 @@ impl<'kernel, P: Platform, const COMMAND_CAPACITY: usize> Runtime<'kernel, P, CO
             .find(|command| command.name == name)
             .copied()
         else {
-            writeln!(self.console, "unknown command: {name}").ok();
+            self.kernel
+                .logger()
+                .warning(format_args!("unknown command: {name}"))
+                .ok();
             return;
         };
 
         if (command.handler)(self.kernel, arguments) == CommandResult::Failure {
-            writeln!(self.console, "command failed: {name}").ok();
+            self.kernel
+                .logger()
+                .error(format_args!("command failed: {name}"))
+                .ok();
         }
     }
 }

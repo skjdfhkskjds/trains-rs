@@ -1,7 +1,5 @@
 //! Three-task workload demonstrating cooperative priority scheduling.
 
-use core::fmt::Write;
-
 use trains_kernel::{
     CurrentTask, Kernel, Priority, TaskId,
     runtime::{Command, CommandResult},
@@ -20,32 +18,34 @@ impl CooperativeYield {
     }
 
     extern "C" fn task(id: TaskId) -> ! {
-        let mut console = KERNEL.console();
+        let mut logger = KERNEL.logger();
         let priority = Priority::new(id.get());
-        writeln!(
-            console,
-            "task {id} (priority {}): before yield",
-            priority.get()
-        )
-        .ok();
+        logger
+            .debug(format_args!(
+                "task {id} (priority {}): before yield",
+                priority.get()
+            ))
+            .ok();
         CurrentTask::yield_now();
-        writeln!(
-            console,
-            "task {id} (priority {}): after yield",
-            priority.get()
-        )
-        .ok();
+        logger
+            .debug(format_args!(
+                "task {id} (priority {}): after yield",
+                priority.get()
+            ))
+            .ok();
         CurrentTask::exit();
     }
 
     fn run(kernel: &Kernel<Raspi4>, _arguments: &str) -> CommandResult {
-        let mut console = kernel.console();
-        writeln!(console, "trains-rs: cooperative yield example").ok();
+        let mut logger = kernel.logger();
+        logger.info("trains-rs: cooperative yield example").ok();
 
         for index in 0..TASK_COUNT {
             let priority = Priority::new(index as u32);
             if kernel.create_task(Self::task, priority).is_err() {
-                writeln!(console, "trains-rs: cooperative yield example failed").ok();
+                logger
+                    .error("trains-rs: cooperative yield example failed")
+                    .ok();
                 return CommandResult::Failure;
             }
         }
@@ -54,10 +54,14 @@ impl CooperativeYield {
             .run_tasks()
             .is_ok_and(|outcome| outcome.exited_tasks() == TASK_COUNT)
         {
-            writeln!(console, "trains-rs: cooperative yield example complete").ok();
+            logger
+                .info("trains-rs: cooperative yield example complete")
+                .ok();
             CommandResult::Success
         } else {
-            writeln!(console, "trains-rs: cooperative yield example failed").ok();
+            logger
+                .error("trains-rs: cooperative yield example failed")
+                .ok();
             CommandResult::Failure
         }
     }
