@@ -6,7 +6,6 @@ use core::pin::{Pin, pin};
 
 use trains_primitives::task::{Priority, TaskId};
 
-use crate::TaskEntry;
 use crate::context::{ArgumentRegister, EntryPoint, RegisterContext, StackTop};
 
 const STACK_SIZE: usize = 8 * 1024;
@@ -19,11 +18,11 @@ pub(crate) struct TaskDescriptor {
     id: TaskId,
     parent: Option<TaskId>,
     priority: Priority,
-    entry: TaskEntry,
+    entry: EntryPoint,
 }
 
 impl TaskDescriptor {
-    pub(crate) const fn root(id: TaskId, priority: Priority, entry: TaskEntry) -> Self {
+    pub(crate) const fn root(id: TaskId, priority: Priority, entry: EntryPoint) -> Self {
         Self {
             id,
             parent: None,
@@ -32,15 +31,15 @@ impl TaskDescriptor {
         }
     }
 
-    const fn with_metadata(
+    pub(crate) const fn child(
         id: TaskId,
-        parent: Option<TaskId>,
+        parent: TaskId,
         priority: Priority,
-        entry: TaskEntry,
+        entry: EntryPoint,
     ) -> Self {
         Self {
             id,
-            parent,
+            parent: Some(parent),
             priority,
             entry,
         }
@@ -81,10 +80,7 @@ impl Task {
         // resulting context may therefore retain a pointer into `stack`.
         let task = unsafe { self.get_unchecked_mut() };
         let stack = task.stack_bounds();
-        task.context = RegisterContext::for_task(
-            EntryPoint::new(task.descriptor.entry as usize),
-            StackTop::new(stack.top),
-        );
+        task.context = RegisterContext::for_task(task.descriptor.entry, StackTop::new(stack.top));
         task.context
             .set_argument(ArgumentRegister::First, u64::from(task.descriptor.id));
     }
@@ -140,8 +136,12 @@ impl Task {
         let id = TaskId::new(7);
         let parent = TaskId::new(3);
         let priority = Priority::new(2);
-        let descriptor =
-            TaskDescriptor::with_metadata(id, Some(parent), priority, Self::test_entry);
+        let descriptor = TaskDescriptor::child(
+            id,
+            parent,
+            priority,
+            EntryPoint::new(Self::test_entry as *const () as usize),
+        );
         let mut task = pin!(Self::new(descriptor));
         task.as_mut().initialize();
         task.as_mut().context_mut().set_register(0, 42);

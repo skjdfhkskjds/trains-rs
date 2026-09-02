@@ -10,5 +10,5 @@ trains-platform = { path = "../platform" }
 trains-primitives = { path = "../primitives" }
 
 [lib]
-test = false
+test = true
 bench = false

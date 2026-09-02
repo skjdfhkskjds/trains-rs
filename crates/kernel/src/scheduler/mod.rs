@@ -13,9 +13,9 @@ use trains_primitives::task::{Priority, TaskId};
 
 use self::priority_queue::PriorityQueue;
 use crate::TaskEntry;
-use crate::context::{ContextSwitcher, RegisterContext};
+use crate::context::{ContextSwitcher, EntryPoint, RegisterContext};
 use crate::exceptions::ExceptionFrame;
-use crate::svc::KernelCall;
+use crate::svc::{self, CreateRequest, KernelCall};
 use crate::task::{Task, TaskDescriptor, TaskState};
 
 const MAX_TASKS: usize = 16;
@@ -65,6 +65,10 @@ impl TaskSlot {
         // SAFETY: occupied tasks remain at stable addresses in the scheduler.
         unsafe { Pin::new_unchecked(self.task.as_mut().expect("vacant task slot")) }
     }
+
+    fn task(&self) -> &Task {
+        self.task.as_ref().expect("vacant task slot")
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -94,11 +98,12 @@ impl SchedulerState {
         }
     }
 
-    fn create(&mut self, entry: TaskEntry, priority: Priority) -> Result<TaskId, CreateError> {
-        if self.phase == SchedulerPhase::Running {
-            return Err(CreateError::SchedulerRunning);
-        }
-
+    fn allocate_task(
+        &mut self,
+        parent: Option<TaskId>,
+        entry: EntryPoint,
+        priority: Priority,
+    ) -> Result<TaskId, CreateError> {
         let slot = self
             .tasks
             .iter()
@@ -107,11 +112,33 @@ impl SchedulerState {
             .ok_or(CreateError::CapacityReached)?;
         let id = TaskId::try_from(slot.index()).map_err(|_| CreateError::TaskIdUnavailable)?;
 
-        self.tasks[slot.index()].occupy(TaskDescriptor::root(id, priority, entry));
-        self.ready
-            .push(slot, priority)
-            .expect("a vacant task slot guarantees ready-queue capacity");
+        let descriptor = match parent {
+            Some(parent) => TaskDescriptor::child(id, parent, priority, entry),
+            None => TaskDescriptor::root(id, priority, entry),
+        };
+        self.tasks[slot.index()].occupy(descriptor);
+        if self.ready.push(slot, priority).is_err() {
+            self.tasks[slot.index()].vacate();
+            return Err(CreateError::CapacityReached);
+        }
         Ok(id)
+    }
+
+    fn create_root(&mut self, entry: TaskEntry, priority: Priority) -> Result<TaskId, CreateError> {
+        if self.phase == SchedulerPhase::Running {
+            return Err(CreateError::SchedulerRunning);
+        }
+
+        self.allocate_task(None, EntryPoint::new(entry as usize), priority)
+    }
+
+    fn create_child(&mut self, request: CreateRequest) -> Result<TaskId, CreateError> {
+        if self.phase != SchedulerPhase::Running {
+            return Err(CreateError::SchedulerRunning);
+        }
+
+        let parent = self.current_task().id();
+        self.allocate_task(Some(parent), request.entry, request.priority)
     }
 
     fn prepare_run(&mut self) -> Result<(), RunError> {
@@ -146,14 +173,60 @@ impl SchedulerState {
         contexts.save(frame, task.as_mut().context_mut());
     }
 
-    fn dispatch_next(&mut self, contexts: &ContextSwitcher, frame: &mut ExceptionFrame) {
+    fn current_task(&self) -> &Task {
+        let current = self.current.expect("operation without a running task");
+        let task = self.tasks[current.index()].task();
+        debug_assert_eq!(task.state(), TaskState::Running);
+        task
+    }
+
+    fn select_next(&mut self) -> SlotId {
+        assert!(
+            self.current.is_none(),
+            "cannot dispatch over a running task"
+        );
         let (next, priority) = self.ready.pop().expect("no task is ready");
         let mut task = self.tasks[next.index()].task_mut();
         debug_assert_eq!(task.state(), TaskState::Ready);
         debug_assert_eq!(task.priority(), priority);
         task.as_mut().set_state(TaskState::Running);
         self.current = Some(next);
+        next
+    }
+
+    fn dispatch_next(&mut self, contexts: &ContextSwitcher, frame: &mut ExceptionFrame) {
+        let next = self.select_next();
+        let task = self.tasks[next.index()].task_mut();
         contexts.restore(frame, task.as_ref().context());
+    }
+
+    /// Moves the running task to `Ready`, optionally completing its syscall.
+    ///
+    /// This is the only transition that re-enqueues a running task, which
+    /// keeps result writes, task state, and ready-queue membership atomic.
+    fn ready_current(&mut self, result: Option<u64>) {
+        let current = self.current.take().expect("ready without a running task");
+        let mut task = self.tasks[current.index()].task_mut();
+        debug_assert_eq!(task.state(), TaskState::Running);
+        if let Some(result) = result {
+            task.as_mut().context_mut().set_register(0, result);
+        }
+        task.as_mut().set_state(TaskState::Ready);
+        let priority = task.priority();
+        self.ready
+            .push(current, priority)
+            .expect("the running task leaves one ready-queue position free");
+    }
+
+    fn complete_current_call(
+        &mut self,
+        contexts: &ContextSwitcher,
+        frame: &mut ExceptionFrame,
+        result: Option<u64>,
+    ) {
+        self.save_current(contexts, frame);
+        self.ready_current(result);
+        self.dispatch_next(contexts, frame);
     }
 
     fn start(&mut self, contexts: &ContextSwitcher, frame: &mut ExceptionFrame) {
@@ -164,21 +237,40 @@ impl SchedulerState {
     }
 
     fn yield_current(&mut self, contexts: &ContextSwitcher, frame: &mut ExceptionFrame) {
+        self.complete_current_call(contexts, frame, None);
+    }
+
+    fn create_current(
+        &mut self,
+        contexts: &ContextSwitcher,
+        frame: &mut ExceptionFrame,
+        request: Result<CreateRequest, CreateError>,
+    ) {
         self.save_current(contexts, frame);
-        let current = self.current.take().expect("yield without a running task");
-        let mut task = self.tasks[current.index()].task_mut();
-        task.as_mut().set_state(TaskState::Ready);
-        let priority = task.priority();
-        self.ready
-            .push(current, priority)
-            .expect("the running task leaves one ready-queue position free");
+        let result = request.and_then(|request| self.create_child(request));
+        self.ready_current(Some(svc::encode_create_result(result)));
         self.dispatch_next(contexts, frame);
     }
 
-    fn exit_current(&mut self, contexts: &ContextSwitcher, frame: &mut ExceptionFrame) {
+    fn current_id(&mut self, contexts: &ContextSwitcher, frame: &mut ExceptionFrame) {
+        let id = self.current_task().id();
+        self.complete_current_call(contexts, frame, Some(u64::from(id)));
+    }
+
+    fn current_parent_id(&mut self, contexts: &ContextSwitcher, frame: &mut ExceptionFrame) {
+        let parent = self.current_task().parent();
+        self.complete_current_call(contexts, frame, Some(svc::encode_parent(parent)));
+    }
+
+    /// Vacates the running task without ever placing it back in a queue.
+    fn vacate_current(&mut self) {
         let current = self.current.take().expect("exit without a running task");
         self.tasks[current.index()].vacate();
         self.exited_tasks += 1;
+    }
+
+    fn exit_current(&mut self, contexts: &ContextSwitcher, frame: &mut ExceptionFrame) {
+        self.vacate_current();
 
         if self.ready.is_empty() {
             self.phase = SchedulerPhase::Idle;
@@ -214,7 +306,7 @@ impl Scheduler {
         entry: TaskEntry,
         priority: Priority,
     ) -> Result<TaskId, CreateError> {
-        self.with_state(|scheduler| scheduler.create(entry, priority))
+        self.with_state(|scheduler| scheduler.create_root(entry, priority))
     }
 
     pub(crate) fn run(&self) -> Result<RunOutcome, RunError> {
@@ -235,6 +327,23 @@ impl Scheduler {
         self.with_state(|scheduler| scheduler.yield_current(contexts, frame));
     }
 
+    pub(crate) fn create_current(
+        &self,
+        contexts: &ContextSwitcher,
+        frame: &mut ExceptionFrame,
+        request: Result<CreateRequest, CreateError>,
+    ) {
+        self.with_state(|scheduler| scheduler.create_current(contexts, frame, request));
+    }
+
+    pub(crate) fn current_id(&self, contexts: &ContextSwitcher, frame: &mut ExceptionFrame) {
+        self.with_state(|scheduler| scheduler.current_id(contexts, frame));
+    }
+
+    pub(crate) fn current_parent_id(&self, contexts: &ContextSwitcher, frame: &mut ExceptionFrame) {
+        self.with_state(|scheduler| scheduler.current_parent_id(contexts, frame));
+    }
+
     pub(crate) fn exit_current(&self, contexts: &ContextSwitcher, frame: &mut ExceptionFrame) {
         self.with_state(|scheduler| scheduler.exit_current(contexts, frame));
     }
@@ -242,9 +351,11 @@ impl Scheduler {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CreateError {
+    InvalidPriority,
     CapacityReached,
     SchedulerRunning,
     TaskIdUnavailable,
+    InvalidEntryPoint,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -261,5 +372,131 @@ pub struct RunOutcome {
 impl RunOutcome {
     pub const fn exited_tasks(self) -> usize {
         self.exited_tasks
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    extern "C" fn task_entry(_id: TaskId) -> ! {
+        loop {
+            core::hint::spin_loop();
+        }
+    }
+
+    fn request(priority: u32) -> CreateRequest {
+        CreateRequest {
+            entry: EntryPoint::new(task_entry as *const () as usize),
+            priority: Priority::new(priority),
+        }
+    }
+
+    fn selected_id(state: &mut SchedulerState) -> TaskId {
+        let slot = state.select_next();
+        state.tasks[slot.index()].task().id()
+    }
+
+    fn saved_x0(state: &SchedulerState, id: TaskId) -> u64 {
+        let task = state.tasks[id.get() as usize].task();
+        // SAFETY: an occupied scheduler slot is never moved while its task is
+        // alive, including for the duration of these state-machine tests.
+        unsafe { Pin::new_unchecked(task) }.context().register(0)
+    }
+
+    #[test]
+    fn equal_priority_tasks_remain_fifo_across_yields() {
+        let mut state = SchedulerState::new();
+        let low = state.create_root(task_entry, Priority::new(3)).unwrap();
+        let first = state.create_root(task_entry, Priority::new(1)).unwrap();
+        let second = state.create_root(task_entry, Priority::new(1)).unwrap();
+
+        state.prepare_run().unwrap();
+        assert_eq!(selected_id(&mut state), first);
+        state.ready_current(None);
+        assert_eq!(selected_id(&mut state), second);
+        state.ready_current(None);
+        assert_eq!(selected_id(&mut state), first);
+        assert_eq!(state.ready.len(), 2);
+        assert_eq!(
+            state.tasks[low.get() as usize].task().state(),
+            TaskState::Ready
+        );
+    }
+
+    #[test]
+    fn child_records_parent_and_preempts_it_by_priority() {
+        let mut state = SchedulerState::new();
+        let parent = state.create_root(task_entry, Priority::new(2)).unwrap();
+        state.prepare_run().unwrap();
+        assert_eq!(selected_id(&mut state), parent);
+
+        let child = state.create_child(request(1)).unwrap();
+        state.ready_current(Some(svc::encode_create_result(Ok(child))));
+
+        assert_eq!(saved_x0(&state, parent), u64::from(child));
+        assert_eq!(selected_id(&mut state), child);
+        assert_eq!(state.current_task().parent(), Some(parent));
+    }
+
+    #[test]
+    fn full_storage_fails_without_changing_ready_queue_order() {
+        let mut state = SchedulerState::new();
+        for expected_id in 0..MAX_TASKS {
+            let priority = if expected_id == 0 { 0 } else { 1 };
+            let id = state
+                .create_root(task_entry, Priority::new(priority))
+                .unwrap();
+            assert_eq!(id.get() as usize, expected_id);
+        }
+
+        state.prepare_run().unwrap();
+        let parent = selected_id(&mut state);
+        assert_eq!(state.ready.len(), MAX_TASKS - 1);
+        assert_eq!(
+            state.create_child(request(0)),
+            Err(CreateError::CapacityReached)
+        );
+        assert_eq!(state.ready.len(), MAX_TASKS - 1);
+
+        state.ready_current(Some(svc::encode_create_result(Err(
+            CreateError::CapacityReached,
+        ))));
+        assert_eq!(state.ready.len(), MAX_TASKS);
+        assert_eq!(selected_id(&mut state), parent);
+        assert_eq!(state.ready.len(), MAX_TASKS - 1);
+        assert_eq!(
+            svc::decode_create_result(saved_x0(&state, parent)),
+            Err(CreateError::CapacityReached)
+        );
+    }
+
+    #[test]
+    fn exiting_task_is_not_selected_and_its_slot_is_reused() {
+        let mut state = SchedulerState::new();
+        let exiting = state.create_root(task_entry, Priority::new(1)).unwrap();
+        let survivor = state.create_root(task_entry, Priority::new(2)).unwrap();
+        state.prepare_run().unwrap();
+        assert_eq!(selected_id(&mut state), exiting);
+
+        state.vacate_current();
+        assert!(state.tasks[exiting.get() as usize].is_vacant());
+        assert_eq!(selected_id(&mut state), survivor);
+
+        let replacement = state.create_child(request(1)).unwrap();
+        assert_eq!(replacement, exiting);
+        state.ready_current(Some(svc::encode_create_result(Ok(replacement))));
+        assert_eq!(selected_id(&mut state), replacement);
+        assert_eq!(state.current_task().parent(), Some(survivor));
+        assert_eq!(state.exited_tasks, 1);
+    }
+
+    #[test]
+    fn bootstrap_task_has_no_parent() {
+        let mut state = SchedulerState::new();
+        let root = state.create_root(task_entry, Priority::new(0)).unwrap();
+
+        assert_eq!(state.tasks[root.get() as usize].task().parent(), None);
+        assert_eq!(svc::decode_parent(svc::encode_parent(None)), None);
     }
 }
