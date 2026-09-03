@@ -7,6 +7,7 @@ use core::pin::{Pin, pin};
 use trains_primitives::task::{Priority, TaskId};
 
 use crate::context::{ArgumentRegister, EntryPoint, RegisterContext, StackTop};
+use crate::ipc::TaskIpc;
 
 const STACK_SIZE: usize = 8 * 1024;
 
@@ -50,6 +51,9 @@ impl TaskDescriptor {
 pub(crate) enum TaskState {
     Ready,
     Running,
+    SendBlocked,
+    ReceiveBlocked,
+    ReplyBlocked,
 }
 
 /// One suspended execution context and the stack backing it.
@@ -60,6 +64,7 @@ pub(crate) struct Task {
     descriptor: TaskDescriptor,
     state: TaskState,
     context: RegisterContext,
+    ipc: TaskIpc,
     stack: TaskStack,
     _pinned: PhantomPinned,
 }
@@ -70,6 +75,7 @@ impl Task {
             descriptor,
             state: TaskState::Ready,
             context: RegisterContext::empty(),
+            ipc: TaskIpc::new(),
             stack: TaskStack([0; STACK_SIZE]),
             _pinned: PhantomPinned,
         }
@@ -115,6 +121,16 @@ impl Task {
         // SAFETY: the returned reference permits mutation but not movement of
         // the context or its pinned owning task.
         &mut unsafe { self.get_unchecked_mut() }.context
+    }
+
+    pub(crate) const fn ipc(&self) -> &TaskIpc {
+        &self.ipc
+    }
+
+    pub(crate) fn ipc_mut(self: Pin<&mut Self>) -> &mut TaskIpc {
+        // SAFETY: IPC metadata is not structurally pinned and is never exposed
+        // outside the duration of this mutable task borrow.
+        &mut unsafe { self.get_unchecked_mut() }.ipc
     }
 
     fn stack_bounds(&self) -> StackBounds {

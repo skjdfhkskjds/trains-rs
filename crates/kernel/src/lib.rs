@@ -4,6 +4,7 @@ use core::arch::asm;
 #[cfg(target_os = "none")]
 use core::arch::global_asm;
 use core::fmt::Write;
+use core::mem::MaybeUninit;
 
 use trains_logger::Logger;
 use trains_platform::{Platform, delay::DelayNs as _};
@@ -18,10 +19,12 @@ mod context;
 mod diagnostics;
 mod exceptions;
 mod interrupts;
+mod ipc;
 pub mod runtime;
 mod scheduler;
 mod svc;
 mod task;
+mod user_memory;
 
 /// Entry ABI for an EL0 task.
 ///
@@ -32,6 +35,7 @@ pub type KernelConsole<P> = <P as Platform>::Console;
 pub type KernelLogger<P> = Logger<KernelConsole<P>>;
 
 pub use exceptions::ExceptionFrame;
+pub use ipc::IpcError;
 pub use scheduler::{CreateError, RunError, RunOutcome};
 
 /// Initialized kernel services available to the application layer.
@@ -180,6 +184,35 @@ impl<P: Platform> Kernel<P> {
             svc::UserCall::MyParentTid => self
                 .scheduler
                 .current_parent_id(&self.context_switcher, frame),
+            svc::UserCall::Send => {
+                let request = svc::SendRequest::decode(
+                    frame.registers[0],
+                    frame.registers[1],
+                    frame.registers[2],
+                    frame.registers[3],
+                    frame.registers[4],
+                );
+                self.scheduler
+                    .send_current(&self.context_switcher, frame, request);
+            }
+            svc::UserCall::Receive => {
+                let request = svc::ReceiveRequest::decode(
+                    frame.registers[0],
+                    frame.registers[1],
+                    frame.registers[2],
+                );
+                self.scheduler
+                    .receive_current(&self.context_switcher, frame, request);
+            }
+            svc::UserCall::Reply => {
+                let request = svc::ReplyRequest::decode(
+                    frame.registers[0],
+                    frame.registers[1],
+                    frame.registers[2],
+                );
+                self.scheduler
+                    .reply_current(&self.context_switcher, frame, request);
+            }
         }
     }
 
@@ -266,6 +299,74 @@ impl CurrentTask {
             )
         };
         svc::decode_parent(result)
+    }
+
+    /// Sends a byte message and blocks until its receiver replies.
+    ///
+    /// The returned value is the reply's logical length. At most
+    /// `reply.len()` bytes are copied, so a larger result reports truncation.
+    pub fn send(receiver: TaskId, message: &[u8], reply: &mut [u8]) -> Result<usize, IpcError> {
+        let result: u64;
+        // SAFETY: the borrowed buffers remain live and inaccessible to this
+        // task while the kernel keeps it blocked. The SVC is a compiler memory
+        // barrier because another task and the kernel may access the buffers.
+        unsafe {
+            asm!(
+                "svc #{svc}",
+                svc = const svc::UserCall::Send as u16,
+                inlateout("x0") u64::from(receiver) => result,
+                in("x1") message.as_ptr(),
+                in("x2") message.len(),
+                in("x3") reply.as_mut_ptr(),
+                in("x4") reply.len(),
+            )
+        };
+        svc::decode_ipc_result(result)
+    }
+
+    /// Receives the oldest waiting byte message, blocking if none is ready.
+    ///
+    /// The result contains the sender ID and the message's logical length. At
+    /// most `message.len()` bytes are copied into the supplied buffer.
+    pub fn receive(message: &mut [u8]) -> Result<(TaskId, usize), IpcError> {
+        let mut sender = MaybeUninit::<TaskId>::uninit();
+        let result: u64;
+        // SAFETY: the kernel writes `sender` before returning a successful
+        // result. Neither retained destination is exposed as a Rust reference,
+        // and both remain live while this task is receive-blocked.
+        unsafe {
+            asm!(
+                "svc #{svc}",
+                svc = const svc::UserCall::Receive as u16,
+                inlateout("x0") sender.as_mut_ptr() => result,
+                in("x1") message.as_mut_ptr(),
+                in("x2") message.len(),
+            )
+        };
+        let length = svc::decode_ipc_result(result)?;
+        // SAFETY: a successful Receive result is written only after the kernel
+        // stores a complete TaskId at the supplied destination.
+        Ok((unsafe { sender.assume_init() }, length))
+    }
+
+    /// Replies to a sender currently blocked on this receiving task.
+    ///
+    /// The returned value is the reply's logical length, even if the sender's
+    /// reply buffer is smaller and receives only a prefix.
+    pub fn reply(sender: TaskId, reply: &[u8]) -> Result<usize, IpcError> {
+        let result: u64;
+        // SAFETY: the immutable reply buffer stays live for the duration of
+        // the call. The kernel copies it before making this task runnable.
+        unsafe {
+            asm!(
+                "svc #{svc}",
+                svc = const svc::UserCall::Reply as u16,
+                inlateout("x0") u64::from(sender) => result,
+                in("x1") reply.as_ptr(),
+                in("x2") reply.len(),
+            )
+        };
+        svc::decode_ipc_result(result)
     }
 
     /// Places the current task at the back of its priority level.
